@@ -38,7 +38,7 @@ jobs:
           docker run --rm --platform linux/arm/v6 \
             -v "$GITHUB_WORKSPACE:/work" \
             -w /work \
-            debian:bullseye \
+            arm32v6/debian:bullseye \
             bash -c '
               set -euo pipefail
               apt-get update
