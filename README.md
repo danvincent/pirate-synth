@@ -88,3 +88,5 @@ wavetable_dir = "/var/lib/pirate-synth/wavetables"
 - Buttons are active-low on BCM GPIO 5, 6, 16, 24 (mapped to Up/Down/Select/Back)
 - Display uses ST7789 over SPI device `/dev/spidev0.0`
 - Display control pins: DC BCM9, backlight BCM13
+- Runtime access is through `rppal` (GPIO character-device `/dev/gpiomem` + SPI `/dev/spidev*`), not legacy `/sys/class/gpio`
+- `pirate-synth.service` logs startup and hardware init to journald (`journalctl -u pirate-synth -b`)

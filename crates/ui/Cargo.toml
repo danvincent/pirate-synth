@@ -7,3 +7,4 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 font8x8 = "0.3"
+rppal = "0.22.1"
