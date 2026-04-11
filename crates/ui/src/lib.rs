@@ -1,12 +1,14 @@
-use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use font8x8::UnicodeFonts;
+use rppal::gpio::{Gpio, InputPin, OutputPin};
+use rppal::spi::{Bus, Mode, SlaveSelect, Spi};
 
 // Keep SPI transfers small to avoid EMSGSIZE from Linux spidev on constrained targets.
 const SPI_FRAMEBUFFER_CHUNK_SIZE: usize = 4096;
+const SPI_CLOCK_HZ: u32 = 16_000_000;
 
 pub const KEY_NAMES: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
@@ -119,23 +121,20 @@ impl MenuState {
 }
 
 pub struct ButtonReader {
-    pins: [SysfsPin; 4],
+    pins: [InputPin; 4],
     last: [bool; 4],
 }
 
 impl ButtonReader {
     pub fn new() -> Result<Self> {
         let bcm = [5u32, 6, 16, 24];
-        let mut pins = [
-            SysfsPin::new(bcm[0]),
-            SysfsPin::new(bcm[1]),
-            SysfsPin::new(bcm[2]),
-            SysfsPin::new(bcm[3]),
+        let gpio = Gpio::new().context("failed to open GPIO controller")?;
+        let pins = [
+            open_input_pullup_pin(&gpio, bcm[0])?,
+            open_input_pullup_pin(&gpio, bcm[1])?,
+            open_input_pullup_pin(&gpio, bcm[2])?,
+            open_input_pullup_pin(&gpio, bcm[3])?,
         ];
-        for pin in &mut pins {
-            pin.export_if_needed()?;
-            pin.set_direction("in")?;
-        }
         Ok(Self {
             pins,
             last: [false; 4],
@@ -145,7 +144,7 @@ impl ButtonReader {
     pub fn poll_pressed(&mut self) -> Result<Option<Button>> {
         let mapping = [Button::Up, Button::Down, Button::Select, Button::Back];
         for (idx, pin) in self.pins.iter_mut().enumerate() {
-            let pressed = !pin.read_value()?;
+            let pressed = pin.is_low();
             let rising = pressed && !self.last[idx];
             self.last[idx] = pressed;
             if rising {
@@ -156,29 +155,40 @@ impl ButtonReader {
     }
 }
 
+fn open_input_pullup_pin(gpio: &Gpio, bcm_pin: u32) -> Result<InputPin> {
+    let pin = gpio
+        .get(bcm_pin as u8)
+        .with_context(|| format!("failed to open BCM gpio{bcm_pin}"))?
+        .into_input_pullup();
+    Ok(pin)
+}
+
 pub struct St7789Display {
-    spi: File,
-    dc: SysfsPin,
-    backlight: Option<SysfsPin>,
+    spi: Spi,
+    dc: OutputPin,
+    backlight: Option<OutputPin>,
 }
 
 impl St7789Display {
     pub fn new(spi_path: &str, dc_pin: u32, backlight_pin: Option<u32>) -> Result<Self> {
-        let spi = File::options()
-            .write(true)
-            .open(spi_path)
+        let (bus, slave_select) = parse_spi_device(spi_path)?;
+        let spi = Spi::new(bus, slave_select, SPI_CLOCK_HZ, Mode::Mode0)
             .with_context(|| format!("failed to open SPI device {spi_path}"))?;
 
-        let mut dc = SysfsPin::new(dc_pin);
-        dc.export_if_needed()?;
-        dc.set_direction("out")?;
+        let gpio = Gpio::new().context("failed to open GPIO controller")?;
+        let mut dc = gpio
+            .get(dc_pin as u8)
+            .with_context(|| format!("failed to open BCM gpio{dc_pin} (display DC)"))?
+            .into_output();
+        dc.set_low();
 
         let backlight = match backlight_pin {
             Some(pin) => {
-                let mut p = SysfsPin::new(pin);
-                p.export_if_needed()?;
-                p.set_direction("out")?;
-                p.write_value(true)?;
+                let mut p = gpio
+                    .get(pin as u8)
+                    .with_context(|| format!("failed to open BCM gpio{pin} (backlight)"))?
+                    .into_output();
+                p.set_high();
                 Some(p)
             }
             None => None,
@@ -196,17 +206,23 @@ impl St7789Display {
         self.command(0x21, &[])?; // display inversion on
         self.command(0x29, &[])?; // display on
         if let Some(backlight) = &mut self.backlight {
-            backlight.write_value(true)?;
+            backlight.set_high();
         }
         Ok(())
     }
 
     fn command(&mut self, cmd: u8, data: &[u8]) -> Result<()> {
-        self.dc.write_value(false)?;
-        self.spi.write_all(&[cmd])?;
+        self.dc.set_low();
+        self.spi
+            .write(&[cmd])
+            .map(|_| ())
+            .with_context(|| format!("failed writing ST7789 command 0x{cmd:02X}"))?;
         if !data.is_empty() {
-            self.dc.write_value(true)?;
-            self.spi.write_all(data)?;
+            self.dc.set_high();
+            self.spi
+                .write(data)
+                .map(|_| ())
+                .with_context(|| format!("failed writing ST7789 payload for 0x{cmd:02X}"))?;
         }
         Ok(())
     }
@@ -227,11 +243,19 @@ impl St7789Display {
 
         self.command(0x2A, &[0x00, 0x00, 0x00, 0xEF])?;
         self.command(0x2B, &[0x00, 0x00, 0x00, 0xEF])?;
-        self.dc.write_value(false)?;
-        self.spi.write_all(&[0x2C])?;
-        self.dc.write_value(true)?;
+        self.dc.set_low();
+        self.spi
+            .write(&[0x2C])
+            .map(|_| ())
+            .context("failed writing ST7789 RAMWR command")?;
+        self.dc.set_high();
         let bytes = fb.to_bytes();
-        write_in_chunks(&mut self.spi, &bytes, SPI_FRAMEBUFFER_CHUNK_SIZE)?;
+        write_in_chunks(&bytes, SPI_FRAMEBUFFER_CHUNK_SIZE, |chunk| {
+            self.spi
+                .write(chunk)
+                .map(|_| ())
+                .context("failed writing ST7789 framebuffer chunk")
+        })?;
         Ok(())
     }
 
@@ -251,11 +275,49 @@ impl St7789Display {
     }
 }
 
-fn write_in_chunks<W: Write>(writer: &mut W, bytes: &[u8], chunk_size: usize) -> Result<()> {
+fn write_in_chunks<F>(bytes: &[u8], chunk_size: usize, mut write_chunk: F) -> Result<()>
+where
+    F: FnMut(&[u8]) -> Result<()>,
+{
     for chunk in bytes.chunks(chunk_size) {
-        writer.write_all(chunk)?;
+        write_chunk(chunk)?;
     }
     Ok(())
+}
+
+fn parse_spi_device(spi_path: &str) -> Result<(Bus, SlaveSelect)> {
+    let device = spi_path.rsplit('/').next().unwrap_or(spi_path);
+    let mut parts = device.split('.');
+    let bus_name = parts
+        .next()
+        .with_context(|| format!("invalid SPI device path {spi_path}"))?;
+    let chip_select = parts
+        .next()
+        .with_context(|| format!("invalid SPI device path {spi_path}"))?;
+    if parts.next().is_some() {
+        anyhow::bail!("invalid SPI device path {spi_path}");
+    }
+
+    let bus = match bus_name {
+        "spidev0" => Bus::Spi0,
+        "spidev1" => Bus::Spi1,
+        "spidev2" => Bus::Spi2,
+        "spidev3" => Bus::Spi3,
+        "spidev4" => Bus::Spi4,
+        "spidev5" => Bus::Spi5,
+        "spidev6" => Bus::Spi6,
+        _ => anyhow::bail!("unsupported SPI bus in {spi_path}; expected /dev/spidevN.M"),
+    };
+
+    let slave_select = match chip_select {
+        "0" => SlaveSelect::Ss0,
+        "1" => SlaveSelect::Ss1,
+        "2" => SlaveSelect::Ss2,
+        "3" => SlaveSelect::Ss3,
+        _ => anyhow::bail!("unsupported SPI chip-select in {spi_path}; expected 0-3"),
+    };
+
+    Ok((bus, slave_select))
 }
 
 struct Framebuffer {
@@ -340,143 +402,9 @@ impl Framebuffer {
     }
 }
 
-#[derive(Clone, Debug)]
-struct SysfsPin {
-    bcm_number: u32,
-    sysfs_number: Option<u32>,
-}
-
-impl SysfsPin {
-    fn new(number: u32) -> Self {
-        Self {
-            bcm_number: number,
-            sysfs_number: None,
-        }
-    }
-
-    fn number(&self) -> u32 {
-        self.sysfs_number.unwrap_or(self.bcm_number)
-    }
-
-    fn path(&self) -> String {
-        format!("/sys/class/gpio/gpio{}", self.number())
-    }
-
-    fn export_if_needed(&mut self) -> Result<()> {
-        let sysfs_number = resolve_sysfs_gpio_number(self.bcm_number)?;
-        self.sysfs_number = Some(sysfs_number);
-
-        if !Path::new(&self.path()).exists() {
-            fs::write("/sys/class/gpio/export", sysfs_number.to_string())
-                .with_context(|| {
-                    format!(
-                        "failed to export bcm gpio{} as sysfs gpio{}",
-                        self.bcm_number, sysfs_number
-                    )
-                })?;
-        }
-        Ok(())
-    }
-
-    fn set_direction(&mut self, direction: &str) -> Result<()> {
-        fs::write(format!("{}/direction", self.path()), direction)
-            .with_context(|| format!("failed to set gpio{} direction", self.number()))?;
-        Ok(())
-    }
-
-    fn read_value(&mut self) -> Result<bool> {
-        let mut value = String::new();
-        File::open(format!("{}/value", self.path()))
-            .with_context(|| format!("failed reading gpio{} value", self.number()))?
-            .read_to_string(&mut value)?;
-        Ok(value.trim() == "1")
-    }
-
-    fn write_value(&mut self, high: bool) -> Result<()> {
-        fs::write(
-            format!("{}/value", self.path()),
-            if high { "1" } else { "0" },
-        )
-        .with_context(|| format!("failed writing gpio{} value", self.number()))?;
-        Ok(())
-    }
-}
-
-fn resolve_sysfs_gpio_number(bcm_number: u32) -> Result<u32> {
-    let mut chips = Vec::new();
-    for entry in fs::read_dir("/sys/class/gpio").context("failed to read /sys/class/gpio")? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.starts_with("gpiochip") {
-            continue;
-        }
-
-        let chip_path = entry.path();
-        let base = fs::read_to_string(chip_path.join("base"))
-            .with_context(|| format!("failed reading {} base", chip_path.display()))?
-            .trim()
-            .parse::<u32>()
-            .with_context(|| format!("failed parsing {} base", chip_path.display()))?;
-        let ngpio = fs::read_to_string(chip_path.join("ngpio"))
-            .with_context(|| format!("failed reading {} ngpio", chip_path.display()))?
-            .trim()
-            .parse::<u32>()
-            .with_context(|| format!("failed parsing {} ngpio", chip_path.display()))?;
-        let label = fs::read_to_string(chip_path.join("label"))
-            .ok()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .unwrap_or_default();
-        chips.push((base, ngpio, label));
-    }
-
-    let base = select_gpio_chip_base(&chips, bcm_number);
-    Ok(base.map_or(bcm_number, |gpio_base| gpio_base + bcm_number))
-}
-
-const SOC_GPIO_LABEL_HINTS: [&str; 3] = ["bcm", "pinctrl", "raspberrypi"];
-
-fn select_gpio_chip_base(chips: &[(u32, u32, String)], bcm_number: u32) -> Option<u32> {
-    let mut preferred = None;
-    let mut fallback = None;
-
-    for (base, ngpio, label) in chips {
-        if *ngpio <= bcm_number {
-            continue;
-        }
-        fallback = Some(fallback.map_or(*base, |current: u32| current.min(*base)));
-
-        if SOC_GPIO_LABEL_HINTS
-            .iter()
-            .any(|hint| label.contains(hint))
-        {
-            preferred = Some(preferred.map_or(*base, |current: u32| current.min(*base)));
-        }
-    }
-
-    preferred.or(fallback)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{self, Write};
-
-    #[derive(Default)]
-    struct RecordingWriter {
-        writes: Vec<Vec<u8>>,
-    }
-
-    impl Write for RecordingWriter {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.writes.push(buf.to_vec());
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
 
     #[test]
     fn menu_navigation_wraps() {
@@ -486,37 +414,29 @@ mod tests {
     }
 
     #[test]
-    fn gpio_chip_base_prefers_bcm_like_labels() {
-        let chips = vec![
-            (0, 8, "other".to_string()),
-            (512, 54, "pinctrl-bcm2835".to_string()),
-        ];
-        assert_eq!(select_gpio_chip_base(&chips, 5), Some(512));
-    }
-
-    #[test]
-    fn gpio_chip_base_falls_back_to_first_matching_chip() {
-        let chips = vec![(256, 32, "unknown".to_string()), (512, 54, "other".to_string())];
-        assert_eq!(select_gpio_chip_base(&chips, 5), Some(256));
-    }
-
-    #[test]
-    fn gpio_chip_base_fallback_is_order_independent() {
-        let chips = vec![(512, 54, "other".to_string()), (256, 32, "unknown".to_string())];
-        assert_eq!(select_gpio_chip_base(&chips, 5), Some(256));
+    fn parse_spi_device_accepts_common_paths() {
+        assert_eq!(
+            parse_spi_device("/dev/spidev0.0").unwrap(),
+            (Bus::Spi0, SlaveSelect::Ss0)
+        );
+        assert_eq!(
+            parse_spi_device("spidev0.1").unwrap(),
+            (Bus::Spi0, SlaveSelect::Ss1)
+        );
     }
 
     #[test]
     fn write_in_chunks_preserves_order_and_boundaries() {
         let data = (0..10).collect::<Vec<u8>>();
-        let mut writer = RecordingWriter::default();
+        let mut writes = Vec::new();
 
-        write_in_chunks(&mut writer, &data, 4).unwrap();
+        write_in_chunks(&data, 4, |chunk| {
+            writes.push(chunk.to_vec());
+            Ok(())
+        })
+        .unwrap();
 
-        assert_eq!(
-            writer.writes,
-            vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9]]
-        );
-        assert_eq!(writer.writes.concat(), data);
+        assert_eq!(writes, vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9]]);
+        assert_eq!(writes.concat(), data);
     }
 }

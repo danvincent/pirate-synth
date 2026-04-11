@@ -5,6 +5,10 @@ After=sound.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/pirate_synth
+Environment=RUST_LOG=info
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pirate-synth
 Restart=always
 RestartSec=2
 

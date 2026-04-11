@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use audio_alsa::{command_channel, spawn_audio_thread, AudioCommand, AudioConfig};
 use engine::{key_to_frequency_hz, load_wavetables, Engine};
+use log::{debug, info, warn};
 use serde::Deserialize;
 use ui::{ButtonReader, MenuState, St7789Display};
 
@@ -69,19 +70,43 @@ impl Default for AppConfig {
 
 fn load_config(path: &Path) -> Result<AppConfig> {
     if !path.exists() {
+        warn!(
+            "config file {} missing, using built-in defaults",
+            path.display()
+        );
         return Ok(AppConfig::default());
     }
     let text = fs::read_to_string(path)
         .with_context(|| format!("failed reading config {}", path.display()))?;
-    Ok(toml::from_str(&text).with_context(|| format!("invalid TOML in {}", path.display()))?)
+    let config =
+        toml::from_str(&text).with_context(|| format!("invalid TOML in {}", path.display()))?;
+    info!("loaded config from {}", path.display());
+    Ok(config)
 }
 
 fn main() -> Result<()> {
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info,pirate_synth=info,ui=info"),
+    )
+    .format_timestamp_secs()
+    .init();
+
     let args: Vec<String> = std::env::args().collect();
+    info!("pirate_synth starting");
+
     let config_path = std::env::var("PIRATE_SYNTH_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_CONFIG_PATH));
+    info!("using config path {}", config_path.display());
     let config = load_config(&config_path)?;
+    info!(
+        "audio config: sample_rate={} buffer_frames={} oscillators={} wavetable dir={} spi_device={}",
+        config.sample_rate,
+        config.buffer_frames,
+        config.oscillators,
+        config.wavetable_dir.display(),
+        config.spi_device
+    );
 
     let wavetables = load_wavetables(&config.wavetable_dir).with_context(|| {
         format!(
@@ -89,6 +114,11 @@ fn main() -> Result<()> {
             config.wavetable_dir.display()
         )
     })?;
+    info!(
+        "loaded {} wavetable(s) from {}",
+        wavetables.len(),
+        config.wavetable_dir.display()
+    );
     let wavetable_names = wavetables
         .iter()
         .map(|w| w.name.clone())
@@ -100,19 +130,29 @@ fn main() -> Result<()> {
         .iter()
         .position(|k| *k == config.root_key)
         .unwrap_or(0);
+    if menu.key_name() != config.root_key {
+        warn!(
+            "unknown root_key '{}' in config, falling back to '{}'",
+            config.root_key,
+            menu.key_name()
+        );
+    }
 
     if args.iter().any(|arg| arg == "--render-ui") {
         let out = PathBuf::from("/tmp/pirate-synth-menu.ppm");
         St7789Display::draw_menu_to_ppm(&menu, &out)?;
-        println!("Rendered UI preview to {}", out.display());
+        info!("rendered UI preview to {}", out.display());
         return Ok(());
     }
 
+    info!("initializing synth engine");
     let mut engine = Engine::new(config.sample_rate, config.oscillators, wavetables.clone())?;
     let initial_hz = key_to_frequency_hz(menu.key_name(), menu.octave, menu.fine_tune_cents)?;
     engine.set_frequency(initial_hz);
+    info!("initial frequency set to {:.2} Hz", initial_hz);
 
     let (audio_tx, audio_rx) = command_channel();
+    info!("starting ALSA audio thread");
     let audio_handle = spawn_audio_thread(
         engine,
         AudioConfig {
@@ -122,14 +162,22 @@ fn main() -> Result<()> {
         audio_rx,
     );
 
+    info!("initializing button GPIO inputs");
     let mut buttons = ButtonReader::new().context("failed to configure Pirate Audio buttons")?;
+    info!("button GPIO inputs initialized");
+
+    info!("initializing ST7789 display over {}", config.spi_device);
     let mut display = St7789Display::new(&config.spi_device, 9, Some(13))
         .context("failed to initialize ST7789 display")?;
+    info!("display initialized (DC=BCM9, backlight=BCM13)");
 
+    info!("rendering initial menu frame");
     display.draw_menu(&menu)?;
+    info!("startup complete");
 
     loop {
         if let Some(button) = buttons.poll_pressed()? {
+            debug!("button press: {:?}", button);
             let old_wavetable = menu.selected_wavetable;
             let old_key = menu.key_name();
             let old_octave = menu.octave;
@@ -139,7 +187,11 @@ fn main() -> Result<()> {
             display.draw_menu(&menu)?;
 
             if menu.selected_wavetable != old_wavetable {
-                let _ = audio_tx.send(AudioCommand::SetWavetableOffset(menu.selected_wavetable));
+                if let Err(err) =
+                    audio_tx.send(AudioCommand::SetWavetableOffset(menu.selected_wavetable))
+                {
+                    warn!("failed to send wavetable change to audio thread: {err}");
+                }
             }
 
             if menu.key_name() != old_key
@@ -147,18 +199,24 @@ fn main() -> Result<()> {
                 || menu.fine_tune_cents != old_cents
             {
                 let hz = key_to_frequency_hz(menu.key_name(), menu.octave, menu.fine_tune_cents)?;
-                let _ = audio_tx.send(AudioCommand::SetFrequencyHz(hz));
+                if let Err(err) = audio_tx.send(AudioCommand::SetFrequencyHz(hz)) {
+                    warn!("failed to send frequency update to audio thread: {err}");
+                }
             }
         }
 
         std::thread::sleep(Duration::from_millis(25));
 
         if args.iter().any(|arg| arg == "--oneshot") {
-            let _ = audio_tx.send(AudioCommand::Stop);
+            info!("--oneshot enabled, requesting audio stop");
+            if let Err(err) = audio_tx.send(AudioCommand::Stop) {
+                warn!("failed to send stop command to audio thread: {err}");
+            }
             break;
         }
     }
 
+    info!("waiting for audio thread to exit");
     match audio_handle.join() {
         Ok(result) => result,
         Err(_) => Err(anyhow::anyhow!("audio thread panicked")),
