@@ -331,36 +331,52 @@ impl Framebuffer {
 
 #[derive(Clone, Debug)]
 struct SysfsPin {
-    number: u32,
+    bcm_number: u32,
+    sysfs_number: Option<u32>,
 }
 
 impl SysfsPin {
     fn new(number: u32) -> Self {
-        Self { number }
+        Self {
+            bcm_number: number,
+            sysfs_number: None,
+        }
+    }
+
+    fn number(&self) -> u32 {
+        self.sysfs_number.unwrap_or(self.bcm_number)
     }
 
     fn path(&self) -> String {
-        format!("/sys/class/gpio/gpio{}", self.number)
+        format!("/sys/class/gpio/gpio{}", self.number())
     }
 
     fn export_if_needed(&mut self) -> Result<()> {
+        let sysfs_number = resolve_sysfs_gpio_number(self.bcm_number)?;
+        self.sysfs_number = Some(sysfs_number);
+
         if !Path::new(&self.path()).exists() {
-            fs::write("/sys/class/gpio/export", self.number.to_string())
-                .with_context(|| format!("failed to export gpio{}", self.number))?;
+            fs::write("/sys/class/gpio/export", sysfs_number.to_string())
+                .with_context(|| {
+                    format!(
+                        "failed to export bcm gpio{} as sysfs gpio{}",
+                        self.bcm_number, sysfs_number
+                    )
+                })?;
         }
         Ok(())
     }
 
     fn set_direction(&mut self, direction: &str) -> Result<()> {
         fs::write(format!("{}/direction", self.path()), direction)
-            .with_context(|| format!("failed to set gpio{} direction", self.number))?;
+            .with_context(|| format!("failed to set gpio{} direction", self.number()))?;
         Ok(())
     }
 
     fn read_value(&mut self) -> Result<bool> {
         let mut value = String::new();
         File::open(format!("{}/value", self.path()))
-            .with_context(|| format!("failed reading gpio{} value", self.number))?
+            .with_context(|| format!("failed reading gpio{} value", self.number()))?
             .read_to_string(&mut value)?;
         Ok(value.trim() == "1")
     }
@@ -370,9 +386,66 @@ impl SysfsPin {
             format!("{}/value", self.path()),
             if high { "1" } else { "0" },
         )
-        .with_context(|| format!("failed writing gpio{} value", self.number))?;
+        .with_context(|| format!("failed writing gpio{} value", self.number()))?;
         Ok(())
     }
+}
+
+fn resolve_sysfs_gpio_number(bcm_number: u32) -> Result<u32> {
+    let direct_path = format!("/sys/class/gpio/gpio{}", bcm_number);
+    if Path::new(&direct_path).exists() {
+        return Ok(bcm_number);
+    }
+
+    let mut chips = Vec::new();
+    for entry in fs::read_dir("/sys/class/gpio").context("failed to read /sys/class/gpio")? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("gpiochip") {
+            continue;
+        }
+
+        let chip_path = entry.path();
+        let base = fs::read_to_string(chip_path.join("base"))
+            .with_context(|| format!("failed reading {} base", chip_path.display()))?
+            .trim()
+            .parse::<u32>()
+            .with_context(|| format!("failed parsing {} base", chip_path.display()))?;
+        let ngpio = fs::read_to_string(chip_path.join("ngpio"))
+            .with_context(|| format!("failed reading {} ngpio", chip_path.display()))?
+            .trim()
+            .parse::<u32>()
+            .with_context(|| format!("failed parsing {} ngpio", chip_path.display()))?;
+        let label = fs::read_to_string(chip_path.join("label"))
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .unwrap_or_default();
+        chips.push((base, ngpio, label));
+    }
+
+    let base = select_gpio_chip_base(&chips, bcm_number);
+    Ok(base.map_or(bcm_number, |gpio_base| gpio_base + bcm_number))
+}
+
+fn select_gpio_chip_base(chips: &[(u32, u32, String)], bcm_number: u32) -> Option<u32> {
+    let mut preferred = None;
+    let mut fallback = None;
+
+    for (base, ngpio, label) in chips {
+        if *ngpio <= bcm_number {
+            continue;
+        }
+        if fallback.is_none() {
+            fallback = Some(*base);
+        }
+        if label.contains("bcm") || label.contains("pinctrl") || label.contains("raspberrypi") {
+            preferred = Some(*base);
+            break;
+        }
+    }
+
+    preferred.or(fallback)
 }
 
 #[cfg(test)]
@@ -384,5 +457,20 @@ mod tests {
         let mut menu = MenuState::with_wavetables(vec!["a".to_string()], 2, 0.0);
         menu.apply_button(Button::Up);
         assert_eq!(menu.selected_item, menu.total_items() - 1);
+    }
+
+    #[test]
+    fn gpio_chip_base_prefers_bcm_like_labels() {
+        let chips = vec![
+            (0, 8, "other".to_string()),
+            (512, 54, "pinctrl-bcm2835".to_string()),
+        ];
+        assert_eq!(select_gpio_chip_base(&chips, 5), Some(512));
+    }
+
+    #[test]
+    fn gpio_chip_base_falls_back_to_first_matching_chip() {
+        let chips = vec![(256, 32, "unknown".to_string()), (512, 54, "other".to_string())];
+        assert_eq!(select_gpio_chip_base(&chips, 5), Some(256));
     }
 }
