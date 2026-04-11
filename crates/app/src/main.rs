@@ -25,6 +25,8 @@ struct AppConfig {
     root_octave: i32,
     #[serde(default)]
     fine_tune_cents: f32,
+    #[serde(default)]
+    stereo_spread: u8,
     #[serde(default = "default_wavetable_dir")]
     wavetable_dir: PathBuf,
     #[serde(default = "default_spi_device")]
@@ -50,7 +52,7 @@ fn default_wavetable_dir() -> PathBuf {
     PathBuf::from("/var/lib/pirate-synth/wavetables")
 }
 fn default_spi_device() -> String {
-    "/dev/spidev0.0".into()
+    "/dev/spidev0.1".into()
 }
 
 impl Default for AppConfig {
@@ -62,6 +64,7 @@ impl Default for AppConfig {
             root_key: default_root_key(),
             root_octave: default_root_octave(),
             fine_tune_cents: 0.0,
+            stereo_spread: 0,
             wavetable_dir: default_wavetable_dir(),
             spi_device: default_spi_device(),
         }
@@ -108,7 +111,7 @@ fn main() -> Result<()> {
         config.spi_device
     );
 
-    let wavetables = load_wavetables(&config.wavetable_dir).with_context(|| {
+    let wavetables = load_wavetables(&config.wavetable_dir, config.oscillators).with_context(|| {
         format!(
             "failed loading wavetables from {}",
             config.wavetable_dir.display()
@@ -130,6 +133,7 @@ fn main() -> Result<()> {
         .iter()
         .position(|k| *k == config.root_key)
         .unwrap_or(0);
+    menu.stereo_spread = config.stereo_spread;
     if menu.key_name() != config.root_key {
         warn!(
             "unknown root_key '{}' in config, falling back to '{}'",
@@ -147,8 +151,10 @@ fn main() -> Result<()> {
 
     info!("initializing synth engine");
     let mut engine = Engine::new(config.sample_rate, config.oscillators, wavetables.clone())?;
-    let initial_hz = key_to_frequency_hz(menu.key_name(), menu.octave, menu.fine_tune_cents)?;
+    let initial_hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
     engine.set_frequency(initial_hz);
+    engine.set_fine_tune_cents(menu.fine_tune_cents);
+    engine.set_stereo_spread(menu.stereo_spread);
     info!("initial frequency set to {:.2} Hz", initial_hz);
 
     let (audio_tx, audio_rx) = command_channel();
@@ -182,25 +188,35 @@ fn main() -> Result<()> {
             let old_key = menu.key_name();
             let old_octave = menu.octave;
             let old_cents = menu.fine_tune_cents;
+            let old_spread = menu.stereo_spread;
 
             menu.apply_button(button);
             display.draw_menu(&menu)?;
 
             if menu.selected_wavetable != old_wavetable {
                 if let Err(err) =
-                    audio_tx.send(AudioCommand::SetWavetableOffset(menu.selected_wavetable))
+                    audio_tx.try_send(AudioCommand::SetWavetableOffset(menu.selected_wavetable))
                 {
                     warn!("failed to send wavetable change to audio thread: {err}");
                 }
             }
 
-            if menu.key_name() != old_key
-                || menu.octave != old_octave
-                || menu.fine_tune_cents != old_cents
-            {
-                let hz = key_to_frequency_hz(menu.key_name(), menu.octave, menu.fine_tune_cents)?;
-                if let Err(err) = audio_tx.send(AudioCommand::SetFrequencyHz(hz)) {
+            if menu.key_name() != old_key || menu.octave != old_octave {
+                let hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetFrequencyHz(hz)) {
                     warn!("failed to send frequency update to audio thread: {err}");
+                }
+            }
+
+            if menu.fine_tune_cents != old_cents {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetFineTuneCents(menu.fine_tune_cents)) {
+                    warn!("failed to send fine tune cents to audio thread: {err}");
+                }
+            }
+
+            if menu.stereo_spread != old_spread {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetStereoSpread(menu.stereo_spread)) {
+                    warn!("failed to send stereo spread to audio thread: {err}");
                 }
             }
         }

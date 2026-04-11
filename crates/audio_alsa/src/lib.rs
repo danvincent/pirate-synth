@@ -16,6 +16,8 @@ pub struct AudioConfig {
 pub enum AudioCommand {
     SetFrequencyHz(f32),
     SetWavetableOffset(usize),
+    SetFineTuneCents(f32),
+    SetStereoSpread(u8),
     Stop,
 }
 
@@ -55,8 +57,10 @@ fn run_audio_loop(
     loop {
         while let Ok(command) = command_rx.try_recv() {
             match command {
-                AudioCommand::SetFrequencyHz(freq) => engine.set_frequency(freq),
+                AudioCommand::SetFrequencyHz(freq) => engine.set_frequency_scheduled(freq),
                 AudioCommand::SetWavetableOffset(offset) => engine.set_wavetable_offset(offset),
+                AudioCommand::SetFineTuneCents(cents) => engine.set_fine_tune_cents(cents),
+                AudioCommand::SetStereoSpread(spread) => engine.set_stereo_spread(spread),
                 AudioCommand::Stop => {
                     drop(stdin);
                     let _ = child.wait();
