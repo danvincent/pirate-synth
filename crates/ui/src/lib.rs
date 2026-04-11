@@ -130,18 +130,10 @@ impl ButtonReader {
         let bcm = [5u32, 6, 16, 24];
         let gpio = Gpio::new().context("failed to open GPIO controller")?;
         let pins = [
-            gpio.get(bcm[0] as u8)
-                .with_context(|| format!("failed to open BCM gpio{}", bcm[0]))?
-                .into_input_pullup(),
-            gpio.get(bcm[1] as u8)
-                .with_context(|| format!("failed to open BCM gpio{}", bcm[1]))?
-                .into_input_pullup(),
-            gpio.get(bcm[2] as u8)
-                .with_context(|| format!("failed to open BCM gpio{}", bcm[2]))?
-                .into_input_pullup(),
-            gpio.get(bcm[3] as u8)
-                .with_context(|| format!("failed to open BCM gpio{}", bcm[3]))?
-                .into_input_pullup(),
+            open_input_pullup_pin(&gpio, bcm[0])?,
+            open_input_pullup_pin(&gpio, bcm[1])?,
+            open_input_pullup_pin(&gpio, bcm[2])?,
+            open_input_pullup_pin(&gpio, bcm[3])?,
         ];
         Ok(Self {
             pins,
@@ -161,6 +153,14 @@ impl ButtonReader {
         }
         Ok(None)
     }
+}
+
+fn open_input_pullup_pin(gpio: &Gpio, bcm_pin: u32) -> Result<InputPin> {
+    let pin = gpio
+        .get(bcm_pin as u8)
+        .with_context(|| format!("failed to open BCM gpio{bcm_pin}"))?
+        .into_input_pullup();
+    Ok(pin)
 }
 
 pub struct St7789Display {

@@ -100,7 +100,7 @@ fn main() -> Result<()> {
     info!("using config path {}", config_path.display());
     let config = load_config(&config_path)?;
     info!(
-        "audio config: sample_rate={} buffer_frames={} oscillators={} wavetable_dir={} spi_device={}",
+        "audio config: sample_rate={} buffer_frames={} oscillators={} wavetable dir={} spi_device={}",
         config.sample_rate,
         config.buffer_frames,
         config.oscillators,
