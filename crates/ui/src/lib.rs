@@ -5,6 +5,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use font8x8::UnicodeFonts;
 
+// Keep SPI transfers small to avoid EMSGSIZE from Linux spidev on constrained targets.
 const SPI_FRAMEBUFFER_CHUNK_SIZE: usize = 4096;
 
 pub const KEY_NAMES: [&str; 12] = [
