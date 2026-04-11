@@ -255,20 +255,20 @@ pub fn load_wavetables(wavetable_dir: &Path, min_count: usize) -> Result<Vec<Wav
     }
 
     if out.len() < min_count {
+        let builtins = builtin_wavetables();
         // First pass: add unique built-ins by name
-        for builtin in builtin_wavetables() {
+        for builtin in &builtins {
             if out.len() >= min_count {
                 break;
             }
             if !out.iter().any(|w| w.name == builtin.name) {
-                out.push(builtin);
+                out.push(builtin.clone());
             }
         }
         // Second pass: if min_count > number of unique built-ins, cycle through
         // built-ins again with an index suffix, checking against existing names
         // to guarantee uniqueness even when user files already use suffixed names.
         if out.len() < min_count {
-            let builtins = builtin_wavetables();
             let mut cycle = 0usize;
             while out.len() < min_count {
                 let b = &builtins[cycle % builtins.len()];
