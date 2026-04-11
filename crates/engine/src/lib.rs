@@ -516,24 +516,35 @@ pub fn load_wavetables(wavetable_dir: &Path, min_count: usize) -> Result<Vec<Wav
     }
 
     if out.len() < min_count {
+        let builtins = builtin_wavetables();
         // First pass: add unique built-ins by name
-        for builtin in builtin_wavetables() {
+        for builtin in &builtins {
             if out.len() >= min_count {
                 break;
             }
             if !out.iter().any(|w| w.name == builtin.name) {
-                out.push(builtin);
+                out.push(builtin.clone());
             }
         }
         // Second pass: if min_count > number of unique built-ins, cycle through
-        // built-ins again with an index suffix to guarantee uniqueness
+        // built-ins again with an index suffix, checking against existing names
+        // to guarantee uniqueness even when user files already use suffixed names.
         if out.len() < min_count {
-            let builtins = builtin_wavetables();
             let mut cycle = 0usize;
             while out.len() < min_count {
                 let b = &builtins[cycle % builtins.len()];
-                let name = format!("{}{}", b.name, cycle / builtins.len() + 2);
-                out.push(Wavetable { name, samples: b.samples.clone() });
+                let mut suffix = cycle / builtins.len() + 2;
+                let name = loop {
+                    let candidate = format!("{}{}", b.name, suffix);
+                    if !out.iter().any(|w| w.name == candidate) {
+                        break candidate;
+                    }
+                    suffix += 1;
+                };
+                out.push(Wavetable {
+                    name,
+                    samples: b.samples.clone(),
+                });
                 cycle += 1;
             }
         }
@@ -576,6 +587,34 @@ fn load_wavetable_file(path: &Path) -> Result<Option<Wavetable>> {
         name: stem.to_string(),
         samples,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn load_wavetables_cycles_builtins_when_min_count_exceeds_unique_builtin_count() {
+        let builtin_len = builtin_wavetables().len();
+        let min_count = builtin_len + 1;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("engine_wavetable_test_{unique}"));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let loaded = load_wavetables(&temp_dir, min_count).unwrap();
+
+        let names: HashSet<_> = loaded.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(loaded.len(), min_count);
+        assert_eq!(names.len(), loaded.len());
+
+        fs::remove_dir_all(&temp_dir).unwrap();
+    }
 }
 
 pub fn default_sine_wavetable() -> Wavetable {
