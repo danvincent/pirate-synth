@@ -18,6 +18,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             binutils \
+            qemu-user-static \
             libasound2-dev \
             gcc-arm-linux-gnueabihf \
             libc6-dev-armhf-cross \
@@ -30,31 +31,31 @@ jobs:
         run: cargo test -p engine -p ui
 
       - name: Build ARMv6 binary (Pi Zero / Zero W)
-        uses: uraimo/run-on-arch-action@v3
-        with:
-          arch: armv6
-          distro: bullseye
-          githubToken: ${{ github.token }}
-          install: |
-            apt-get update
-            apt-get install -y --no-install-recommends \
-              build-essential \
-              ca-certificates \
-              curl \
-              libasound2-dev \
-              pkg-config
-          run: |
-            set -euo pipefail
+        run: |
+          set -euo pipefail
 
-            export RUSTUP_HOME=/tmp/rustup
-            export CARGO_HOME=/tmp/cargo
-            export PATH="$CARGO_HOME/bin:$PATH"
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
-            . "$CARGO_HOME/env"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          docker run --rm --platform linux/arm/v6 \
+            -v "$GITHUB_WORKSPACE:/work" \
+            -w /work \
+            debian:bullseye \
+            bash -c '
+              set -euo pipefail
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                build-essential \
+                ca-certificates \
+                curl \
+                libasound2-dev \
+                pkg-config
 
-            cd "$GITHUB_WORKSPACE"
-            cargo build --release -p pirate_synth
-            install -Dm 0755 target/release/pirate_synth dist/pirate_synth-armv6-native
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+              . "$HOME/.cargo/env"
+
+              export CARGO_TARGET_DIR=/work/target-armv6
+              cargo build --release -p pirate_synth
+              install -Dm 0755 "$CARGO_TARGET_DIR/release/pirate_synth" /work/dist/pirate_synth-armv6-native
+            '
 
       - name: Fix workspace permissions after ARMv6 container build
         run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/dist"
