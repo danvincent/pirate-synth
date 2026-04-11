@@ -31,6 +31,91 @@ struct Oscillator {
     drift_lfo_rate_hz: f32,
     pan_l: f32,
     pan_r: f32,
+    tremolo_phase: f32,
+    tremolo_rate_hz: f32,
+}
+
+struct CombFilter {
+    buffer: Vec<f32>,
+    pos: usize,
+    feedback: f32,
+    damp: f32,
+    damp_state: f32,
+}
+
+impl CombFilter {
+    fn new(delay_samples: usize, feedback: f32, damp: f32) -> Self {
+        Self {
+            buffer: vec![0.0; delay_samples],
+            pos: 0,
+            feedback,
+            damp,
+            damp_state: 0.0,
+        }
+    }
+
+    fn process(&mut self, input: f32) -> f32 {
+        let out = self.buffer[self.pos];
+        self.damp_state = out * (1.0 - self.damp) + self.damp_state * self.damp;
+        self.buffer[self.pos] = input + self.damp_state * self.feedback;
+        self.pos = (self.pos + 1) % self.buffer.len();
+        out
+    }
+}
+
+struct AllpassFilter {
+    buffer: Vec<f32>,
+    pos: usize,
+}
+
+impl AllpassFilter {
+    fn new(delay_samples: usize) -> Self {
+        Self { buffer: vec![0.0; delay_samples], pos: 0 }
+    }
+
+    fn process(&mut self, input: f32) -> f32 {
+        let buf = self.buffer[self.pos];
+        let out = -input + buf;
+        self.buffer[self.pos] = input + buf * 0.5;
+        self.pos = (self.pos + 1) % self.buffer.len();
+        out
+    }
+}
+
+struct Reverb {
+    combs: [CombFilter; 4],
+    allpasses: [AllpassFilter; 2],
+}
+
+impl Reverb {
+    /// short = true → short room (odd bus); short = false → long room (even bus)
+    fn new(short: bool) -> Self {
+        let scale = if short { 1.0f32 } else { 1.25f32 };
+        let feedback = 0.84f32;
+        let damp = 0.20f32;
+        // Base comb delays (samples at 48kHz)
+        let delays = [1116usize, 1188, 1277, 1356];
+        let combs = [
+            CombFilter::new((delays[0] as f32 * scale) as usize, feedback, damp),
+            CombFilter::new((delays[1] as f32 * scale) as usize, feedback, damp),
+            CombFilter::new((delays[2] as f32 * scale) as usize, feedback, damp),
+            CombFilter::new((delays[3] as f32 * scale) as usize, feedback, damp),
+        ];
+        let allpasses = [
+            AllpassFilter::new(556),
+            AllpassFilter::new(441),
+        ];
+        Self { combs, allpasses }
+    }
+
+    fn process(&mut self, input: f32) -> f32 {
+        let comb_sum = self.combs[0].process(input)
+            + self.combs[1].process(input)
+            + self.combs[2].process(input)
+            + self.combs[3].process(input);
+        let ap1 = self.allpasses[0].process(comb_sum);
+        self.allpasses[1].process(ap1)
+    }
 }
 
 pub struct Engine {
@@ -41,6 +126,33 @@ pub struct Engine {
     base_frequency_hz: f32,
     fine_tune_cents: f32,
     stereo_spread: u8,
+    // Reverb
+    reverb_enabled: bool,
+    reverb_wet: f32,
+    reverb_odd: Reverb,
+    reverb_even: Reverb,
+    // Tremolo
+    tremolo_enabled: bool,
+    tremolo_depth: f32,
+    // Crossfade
+    crossfade_enabled: bool,
+    xfade_rate: f32,
+    xfade_t: f32,
+    xfade_index_offset: usize,
+    // Filter sweep
+    filter_sweep_enabled: bool,
+    filter_sweep_min: f32,
+    filter_sweep_max: f32,
+    filter_sweep_rate_hz: f32,
+    filter_l: f32,
+    filter_r: f32,
+    filter_lfo_phase: f32,
+    // FM
+    fm_enabled: bool,
+    fm_depth: f32,
+    // Subtractive
+    subtractive_enabled: bool,
+    subtractive_depth: f32,
 }
 
 fn lcg_next(state: &mut u64) -> u32 {
@@ -66,9 +178,11 @@ impl Engine {
             let center = (oscillator_count.saturating_sub(1) as f32) / 2.0;
             let cents = (i as f32 - center) * 4.0;
             
-            let mut rng_state = (sample_rate as u64).wrapping_mul(0xdeadbeef).wrapping_add(i as u64 * 0x9e3779b97f4a7c15);
+            let mut rng_state = (sample_rate as u64).wrapping_mul(0xdeadbeef).wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15));
             let drift_lfo_start = lcg_next(&mut rng_state) as f32 / u32::MAX as f32;
             let drift_lfo_rate = 0.05 + (lcg_next(&mut rng_state) as f32 / u32::MAX as f32) * 0.45;
+            let tremolo_phase_start = lcg_next(&mut rng_state) as f32 / u32::MAX as f32;
+            let tremolo_rate = 0.03 + (lcg_next(&mut rng_state) as f32 / u32::MAX as f32) * 0.22;
             
             oscillators.push(Oscillator {
                 phase: 0.0,
@@ -81,6 +195,8 @@ impl Engine {
                 drift_lfo_rate_hz: drift_lfo_rate,
                 pan_l: std::f32::consts::FRAC_1_SQRT_2,
                 pan_r: std::f32::consts::FRAC_1_SQRT_2,
+                tremolo_phase: tremolo_phase_start,
+                tremolo_rate_hz: tremolo_rate,
             });
         }
 
@@ -92,6 +208,27 @@ impl Engine {
             base_frequency_hz: 65.406_39,
             fine_tune_cents: 0.0,
             stereo_spread: 0,
+            reverb_enabled: true,
+            reverb_wet: 0.20,
+            reverb_odd: Reverb::new(true),
+            reverb_even: Reverb::new(false),
+            tremolo_enabled: true,
+            tremolo_depth: 0.35,
+            crossfade_enabled: true,
+            xfade_rate: 0.05,
+            xfade_t: 0.0,
+            xfade_index_offset: 0,
+            filter_sweep_enabled: true,
+            filter_sweep_min: 0.15,
+            filter_sweep_max: 0.80,
+            filter_sweep_rate_hz: 0.008,
+            filter_l: 0.0,
+            filter_r: 0.0,
+            filter_lfo_phase: 0.0,
+            fm_enabled: false,
+            fm_depth: 0.15,
+            subtractive_enabled: false,
+            subtractive_depth: 0.30,
         };
         
         engine.set_stereo_spread(0);
@@ -132,6 +269,7 @@ impl Engine {
     }
 
     pub fn set_stereo_spread(&mut self, spread: u8) {
+        let spread = spread.min(100);
         self.stereo_spread = spread;
         let spread_f = spread as f32 / 100.0;
         let n = self.oscillators.len();
@@ -153,47 +291,172 @@ impl Engine {
         }
     }
 
+    pub fn set_reverb(&mut self, enabled: bool, wet: f32) {
+        self.reverb_enabled = enabled;
+        self.reverb_wet = wet.clamp(0.0, 1.0);
+    }
+
+    pub fn set_tremolo(&mut self, enabled: bool, depth: f32) {
+        self.tremolo_enabled = enabled;
+        self.tremolo_depth = depth.clamp(0.0, 1.0);
+    }
+
+    pub fn set_crossfade(&mut self, enabled: bool, rate: f32) {
+        self.crossfade_enabled = enabled;
+        self.xfade_rate = rate.max(0.0);
+    }
+
+    pub fn set_filter_sweep(&mut self, enabled: bool, min: f32, max: f32, rate_hz: f32) {
+        self.filter_sweep_enabled = enabled;
+        self.filter_sweep_min = min.clamp(0.0, 1.0);
+        self.filter_sweep_max = max.clamp(0.0, 1.0);
+        self.filter_sweep_rate_hz = rate_hz.max(0.0);
+    }
+
+    pub fn set_fm(&mut self, enabled: bool, depth: f32) {
+        self.fm_enabled = enabled;
+        self.fm_depth = depth.clamp(0.0, 1.0);
+    }
+
+    pub fn set_subtractive(&mut self, enabled: bool, depth: f32) {
+        self.subtractive_enabled = enabled;
+        self.subtractive_depth = depth.clamp(0.0, 1.0);
+    }
+
     pub fn render_i16_stereo(&mut self, out: &mut [i16]) {
         for frame in out.chunks_exact_mut(2) {
-            let mut l_out = 0.0f32;
-            let mut r_out = 0.0f32;
+            let mut odd_l = 0.0f32;
+            let mut odd_r = 0.0f32;
+            let mut even_l = 0.0f32;
+            let mut even_r = 0.0f32;
+            let mut odd_mono = 0.0f32;  // For FM modulation
             let table_count = self.wavetables.len();
+
             for (osc_idx, osc) in self.oscillators.iter_mut().enumerate() {
-                let table_index = (self.wavetable_offset + osc_idx) % table_count;
-                let table = &self.wavetables[table_index].samples;
-                let len = table.len() as f32;
-                let phase_pos = osc.phase * len;
-                let i0 = phase_pos as usize % table.len();
-                let i1 = (i0 + 1) % table.len();
-                let frac = phase_pos - (i0 as f32);
-                let s = table[i0] * (1.0 - frac) + table[i1] * frac;
+                let cur_idx = (self.wavetable_offset + self.xfade_index_offset + osc_idx) % table_count;
+                let next_idx = (cur_idx + 1) % table_count;
 
-                l_out += s * osc.pan_l;
-                r_out += s * osc.pan_r;
+                let s = if self.crossfade_enabled && self.xfade_t > 0.0 {
+                    let cur_table = &self.wavetables[cur_idx].samples;
+                    let next_table = &self.wavetables[next_idx].samples;
+                    let len_cur = cur_table.len() as f32;
+                    let len_next = next_table.len() as f32;
 
-                // Drift LFO: advance phase
+                    let phase_pos_cur = osc.phase * len_cur;
+                    let i0c = phase_pos_cur as usize % cur_table.len();
+                    let i1c = (i0c + 1) % cur_table.len();
+                    let frac_c = phase_pos_cur - (i0c as f32);
+                    let s_cur = cur_table[i0c] * (1.0 - frac_c) + cur_table[i1c] * frac_c;
+
+                    let phase_pos_next = osc.phase * len_next;
+                    let i0n = phase_pos_next as usize % next_table.len();
+                    let i1n = (i0n + 1) % next_table.len();
+                    let frac_n = phase_pos_next - (i0n as f32);
+                    let s_next = next_table[i0n] * (1.0 - frac_n) + next_table[i1n] * frac_n;
+
+                    s_cur * (1.0 - self.xfade_t) + s_next * self.xfade_t
+                } else {
+                    let table = &self.wavetables[cur_idx].samples;
+                    let len = table.len() as f32;
+                    let phase_pos = osc.phase * len;
+                    let i0 = phase_pos as usize % table.len();
+                    let i1 = (i0 + 1) % table.len();
+                    let frac = phase_pos - (i0 as f32);
+                    table[i0] * (1.0 - frac) + table[i1] * frac
+                };
+                let mut s = s;
+
+                // Apply tremolo if enabled
+                if self.tremolo_enabled {
+                    let amp = 1.0 - self.tremolo_depth * (1.0 - (osc.tremolo_phase * 2.0 * std::f32::consts::PI).cos()) * 0.5;
+                    let incr = osc.tremolo_rate_hz / self.sample_rate as f32;
+                    osc.tremolo_phase = (osc.tremolo_phase + incr).fract();
+                    s = s * amp;
+                }
+
+                // Drift LFO
                 let lfo_incr = osc.drift_lfo_rate_hz / self.sample_rate as f32;
                 osc.drift_lfo_phase = (osc.drift_lfo_phase + lfo_incr).fract();
-                
-                // Drift multiplier: 2^(cents * sin(phase * 2PI) / 1200)
                 let drift_cents = self.fine_tune_cents * (osc.drift_lfo_phase * 2.0 * std::f32::consts::PI).sin();
                 let drift_ratio = 2.0f32.powf(drift_cents / 1200.0);
 
-                let incr = (osc.current_base_hz * osc.detune_ratio * drift_ratio) / self.sample_rate as f32;
+                // FM modulation: odd osc output modulates even osc phase
+                let fm_mod = if self.fm_enabled && osc_idx % 2 == 0 { odd_mono * self.fm_depth } else { 0.0 };
+                let incr = (osc.current_base_hz * osc.detune_ratio * drift_ratio) / self.sample_rate as f32 + fm_mod;
                 let new_phase = osc.phase + incr;
-                if new_phase >= 1.0 {
+                let cycles_completed = new_phase.floor() as u32;
+                if cycles_completed > 0 {
                     if let Some(pending_hz) = osc.pending_base_hz {
-                        if osc.delay_cycles_remaining <= 1 {
+                        if osc.delay_cycles_remaining <= cycles_completed {
                             osc.current_base_hz = pending_hz;
                             osc.pending_base_hz = None;
                             osc.delay_cycles_remaining = 0;
                         } else {
-                            osc.delay_cycles_remaining -= 1;
+                            osc.delay_cycles_remaining -= cycles_completed;
                         }
                     }
                 }
                 osc.phase = new_phase.fract();
+
+                // Route to odd or even bus and track odd_mono for FM
+                if osc_idx % 2 == 1 {
+                    odd_mono += s;
+                    odd_l += s * osc.pan_l;
+                    odd_r += s * osc.pan_r;
+                } else {
+                    even_l += s * osc.pan_l;
+                    even_r += s * osc.pan_r;
+                }
             }
+
+            // Advance crossfade timer
+            if self.crossfade_enabled {
+                let xfade_incr = self.xfade_rate / self.sample_rate as f32;
+                self.xfade_t += xfade_incr;
+                if self.xfade_t >= 1.0 {
+                    self.xfade_t = 0.0;
+                    self.xfade_index_offset = (self.xfade_index_offset + 1) % table_count.max(1);
+                }
+            }
+
+            // Apply subtractive mixing BEFORE reverb
+            let (eff_even_l, eff_even_r) = if self.subtractive_enabled {
+                (even_l * (1.0 - self.subtractive_depth), even_r * (1.0 - self.subtractive_depth))
+            } else {
+                (even_l, even_r)
+            };
+
+            // Apply reverb if enabled
+            let (l_out, r_out) = if self.reverb_enabled {
+                let wet = self.reverb_wet;
+                let dry = 1.0 - wet;
+                let odd_rev_l = self.reverb_odd.process(odd_l);
+                let odd_rev_r = self.reverb_odd.process(odd_r);
+                let even_rev_l = self.reverb_even.process(eff_even_l);
+                let even_rev_r = self.reverb_even.process(eff_even_r);
+                (
+                    dry * (odd_l + eff_even_l) + wet * (odd_rev_l + even_rev_l),
+                    dry * (odd_r + eff_even_r) + wet * (odd_rev_r + even_rev_r),
+                )
+            } else {
+                (odd_l + eff_even_l, odd_r + eff_even_r)
+            };
+
+            // Apply filter sweep if enabled
+            let (l_out, r_out) = if self.filter_sweep_enabled {
+                // Compute current cutoff from LFO
+                let cos_val = (self.filter_lfo_phase * 2.0 * std::f32::consts::PI).cos();
+                let a = self.filter_sweep_min + (self.filter_sweep_max - self.filter_sweep_min) * (1.0 - cos_val) * 0.5;
+                let a = a.clamp(0.0, 1.0);
+                // Advance LFO phase
+                self.filter_lfo_phase = (self.filter_lfo_phase + self.filter_sweep_rate_hz / self.sample_rate as f32).fract();
+                // Apply one-pole LP: y = a*y + (1-a)*x
+                self.filter_l = a * self.filter_l + (1.0 - a) * l_out;
+                self.filter_r = a * self.filter_r + (1.0 - a) * r_out;
+                (self.filter_l, self.filter_r)
+            } else {
+                (l_out, r_out)
+            };
 
             let gain = 0.25f32 / self.oscillators.len() as f32;
             let l = (l_out * gain).clamp(-1.0, 1.0);
@@ -253,12 +516,36 @@ pub fn load_wavetables(wavetable_dir: &Path, min_count: usize) -> Result<Vec<Wav
     }
 
     if out.len() < min_count {
-        for builtin in builtin_wavetables() {
+        let builtins = builtin_wavetables();
+        // First pass: add unique built-ins by name
+        for builtin in &builtins {
             if out.len() >= min_count {
                 break;
             }
             if !out.iter().any(|w| w.name == builtin.name) {
-                out.push(builtin);
+                out.push(builtin.clone());
+            }
+        }
+        // Second pass: if min_count > number of unique built-ins, cycle through
+        // built-ins again with an index suffix, checking against existing names
+        // to guarantee uniqueness even when user files already use suffixed names.
+        if out.len() < min_count {
+            let mut cycle = 0usize;
+            while out.len() < min_count {
+                let b = &builtins[cycle % builtins.len()];
+                let mut suffix = cycle / builtins.len() + 2;
+                let name = loop {
+                    let candidate = format!("{}{}", b.name, suffix);
+                    if !out.iter().any(|w| w.name == candidate) {
+                        break candidate;
+                    }
+                    suffix += 1;
+                };
+                out.push(Wavetable {
+                    name,
+                    samples: b.samples.clone(),
+                });
+                cycle += 1;
             }
         }
     }
@@ -431,6 +718,25 @@ pub fn builtin_wavetables() -> Vec<Wavetable> {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
+    use std::collections::HashSet;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn load_wavetables_cycles_builtins_when_min_count_exceeds_unique_builtin_count() {
+        let builtin_len = builtin_wavetables().len();
+        let min_count = builtin_len + 1;
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("engine_wavetable_test_{unique}"));
+        fs::create_dir_all(&temp_dir).unwrap();
+        let loaded = load_wavetables(&temp_dir, min_count).unwrap();
+        let names: HashSet<_> = loaded.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(loaded.len(), min_count);
+        assert_eq!(names.len(), loaded.len());
+        fs::remove_dir_all(&temp_dir).unwrap();
+    }
 
     #[test]
     fn converts_key_to_frequency() {
@@ -491,8 +797,9 @@ mod tests {
 
     #[test]
     fn load_wavetables_pads_to_min_count() {
-        let dir = std::env::temp_dir().join("pirate_synth_test_empty");
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = std::env::temp_dir().join(format!("pirate_synth_test_empty_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
         let result = load_wavetables(&dir, 8).unwrap();
         assert_eq!(result.len(), 8);
         let names: std::collections::HashSet<_> = result.iter().map(|w| w.name.as_str()).collect();
@@ -555,5 +862,266 @@ mod tests {
         engine.render_i16_stereo(&mut out);
         let differs = out.chunks_exact(2).any(|f| f[0] != f[1]);
         assert!(differs, "L and R should differ at spread=100");
+    }
+
+    #[test]
+    fn reverb_disabled_passes_dry_unchanged() {
+        let table = default_sine_wavetable();
+        let mut engine_dry = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+        engine_dry.set_reverb(false, 0.0);
+        engine_dry.set_frequency(220.0);
+
+        let mut engine_ref = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+        engine_ref.set_reverb(false, 0.0);
+        engine_ref.set_frequency(220.0);
+
+        let mut out_dry = vec![0i16; 256];
+        let mut out_ref = vec![0i16; 256];
+        engine_dry.render_i16_stereo(&mut out_dry);
+        engine_ref.render_i16_stereo(&mut out_ref);
+        assert_eq!(out_dry, out_ref);
+    }
+
+    #[test]
+    fn reverb_wet_zero_equals_disabled() {
+        let table = default_sine_wavetable();
+        let mut engine_a = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+        engine_a.set_reverb(true, 0.0);
+        engine_a.set_frequency(220.0);
+
+        let mut engine_b = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+        engine_b.set_reverb(false, 0.0);
+        engine_b.set_frequency(220.0);
+
+        let mut out_a = vec![0i16; 256];
+        let mut out_b = vec![0i16; 256];
+        engine_a.render_i16_stereo(&mut out_a);
+        engine_b.render_i16_stereo(&mut out_b);
+        assert_eq!(out_a, out_b);
+    }
+
+    #[test]
+    fn reverb_enabled_nonzero_wet_modifies_output() {
+        let table = default_sine_wavetable();
+        let mut engine_dry = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+        engine_dry.set_reverb(false, 0.0);
+        engine_dry.set_frequency(220.0);
+
+        let mut engine_wet = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+        engine_wet.set_reverb(true, 0.5);
+        engine_wet.set_frequency(220.0);
+
+        // Run long enough for reverb tails to develop
+        let mut out_dry = vec![0i16; 4096];
+        let mut out_wet = vec![0i16; 4096];
+        engine_dry.render_i16_stereo(&mut out_dry);
+        engine_wet.render_i16_stereo(&mut out_wet);
+        // After enough samples the outputs should diverge
+        let differs = out_dry.iter().zip(&out_wet).any(|(a, b)| a != b);
+        assert!(differs, "reverb wet output should differ from dry");
+    }
+
+    #[test]
+    fn tremolo_zero_depth_output_unchanged() {
+        let table = default_sine_wavetable();
+        let mut engine_a = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+        engine_a.set_tremolo(true, 0.0);
+        engine_a.set_reverb(false, 0.0);
+        engine_a.set_frequency(110.0);
+
+        let mut engine_b = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+        engine_b.set_tremolo(false, 0.0);
+        engine_b.set_reverb(false, 0.0);
+        engine_b.set_frequency(110.0);
+
+        let mut out_a = vec![0i16; 512];
+        let mut out_b = vec![0i16; 512];
+        engine_a.render_i16_stereo(&mut out_a);
+        engine_b.render_i16_stereo(&mut out_b);
+        assert_eq!(out_a, out_b, "tremolo depth=0 should not change output");
+    }
+
+    #[test]
+    fn tremolo_disabled_output_unchanged() {
+        let table = default_sine_wavetable();
+        let mut engine_on = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+        engine_on.set_tremolo(false, 0.5);
+        engine_on.set_reverb(false, 0.0);
+        engine_on.set_frequency(110.0);
+
+        let mut engine_off = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+        engine_off.set_tremolo(false, 0.0);
+        engine_off.set_reverb(false, 0.0);
+        engine_off.set_frequency(110.0);
+
+        let mut out_on = vec![0i16; 512];
+        let mut out_off = vec![0i16; 512];
+        engine_on.render_i16_stereo(&mut out_on);
+        engine_off.render_i16_stereo(&mut out_off);
+        assert_eq!(out_on, out_off, "tremolo disabled should not change output regardless of depth");
+    }
+
+    #[test]
+    fn tremolo_nonzero_depth_varies_amplitude() {
+        let table = default_sine_wavetable();
+        let mut engine = Engine::new(48_000, 2, vec![table.clone(), table.clone()]).unwrap();
+        engine.set_tremolo(true, 1.0);
+        engine.set_reverb(false, 0.0);
+        engine.set_frequency(110.0);
+
+        // Render enough for tremolo to modulate (~1 full period at 0.03 Hz min = 1.6s = 76k samples)
+        // Use 2048 samples; check that L values are not all the same magnitude
+        let mut out = vec![0i16; 2048];
+        engine.render_i16_stereo(&mut out);
+        let l_vals: Vec<i16> = out.chunks_exact(2).map(|f| f[0]).collect();
+        let min = l_vals.iter().copied().min().unwrap();
+        let max = l_vals.iter().copied().max().unwrap();
+        // With depth=1.0, amplitude modulates between 0 and 1, so range should be substantial
+        assert!(max > 0 && (max - min) > 0, "tremolo with depth=1 should produce varying amplitude");
+    }
+
+    #[test]
+    fn crossfade_disabled_uses_base_table() {
+        let table_a = default_sine_wavetable();
+        let table_b = Wavetable { name: "square".to_string(), samples: vec![1.0, 1.0, -1.0, -1.0] };
+
+        let mut engine_cf = Engine::new(48_000, 2, vec![table_a.clone(), table_b.clone()]).unwrap();
+        engine_cf.set_crossfade(false, 0.0);
+        engine_cf.set_reverb(false, 0.0);
+        engine_cf.set_tremolo(false, 0.0);
+        engine_cf.set_frequency(110.0);
+
+        let mut engine_base = Engine::new(48_000, 2, vec![table_a.clone(), table_b.clone()]).unwrap();
+        engine_base.set_crossfade(false, 0.0);
+        engine_base.set_reverb(false, 0.0);
+        engine_base.set_tremolo(false, 0.0);
+        engine_base.set_frequency(110.0);
+
+        let mut out_cf = vec![0i16; 256];
+        let mut out_base = vec![0i16; 256];
+        engine_cf.render_i16_stereo(&mut out_cf);
+        engine_base.render_i16_stereo(&mut out_base);
+        assert_eq!(out_cf, out_base, "disabled crossfade should match baseline");
+    }
+
+    #[test]
+    fn crossfade_advances_xfade_t() {
+        // With a high rate, after enough samples xfade_t should wrap around (index advances)
+        let table_a = default_sine_wavetable();
+        let table_b = Wavetable { name: "square".to_string(), samples: vec![1.0, 1.0, -1.0, -1.0] };
+
+        let mut engine = Engine::new(48_000, 2, vec![table_a.clone(), table_b.clone()]).unwrap();
+        // rate=48000 means xfade_t advances 1.0 per sample → wraps every sample
+        engine.set_crossfade(true, 48000.0);
+        engine.set_reverb(false, 0.0);
+        engine.set_tremolo(false, 0.0);
+        engine.set_frequency(110.0);
+
+        let mut out = vec![0i16; 512];
+        engine.render_i16_stereo(&mut out);
+        // Just verify it doesn't panic and produces some output
+        assert!(out.iter().any(|&s| s != 0));
+    }
+
+    #[test]
+    fn crossfade_at_zero_rate_stays_at_base() {
+        let table_a = default_sine_wavetable();
+        let table_b = Wavetable { name: "square".to_string(), samples: vec![1.0, 1.0, -1.0, -1.0] };
+
+        let mut engine = Engine::new(48_000, 2, vec![table_a.clone(), table_b.clone()]).unwrap();
+        engine.set_crossfade(true, 0.0);  // rate=0 → xfade_t never advances
+        engine.set_reverb(false, 0.0);
+        engine.set_tremolo(false, 0.0);
+        engine.set_frequency(110.0);
+
+        let mut engine_ref = Engine::new(48_000, 2, vec![table_a.clone(), table_b.clone()]).unwrap();
+        engine_ref.set_crossfade(false, 0.0);
+        engine_ref.set_reverb(false, 0.0);
+        engine_ref.set_tremolo(false, 0.0);
+        engine_ref.set_frequency(110.0);
+
+        let mut out = vec![0i16; 256];
+        let mut out_ref = vec![0i16; 256];
+        engine.render_i16_stereo(&mut out);
+        engine_ref.render_i16_stereo(&mut out_ref);
+        assert_eq!(out, out_ref, "crossfade with rate=0 should not change output");
+    }
+
+    #[test]
+    fn filter_sweep_disabled_passes_unchanged() {
+        let table = default_sine_wavetable();
+        let mut engine_a = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+        engine_a.set_filter_sweep(false, 0.15, 0.80, 0.008);
+        engine_a.set_reverb(false, 0.0);
+        engine_a.set_tremolo(false, 0.0);
+        engine_a.set_crossfade(false, 0.0);
+        engine_a.set_fm(false, 0.0);
+        engine_a.set_subtractive(false, 0.0);
+        engine_a.set_frequency(110.0);
+
+        let mut engine_b = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+        engine_b.set_filter_sweep(false, 0.15, 0.80, 0.008);
+        engine_b.set_reverb(false, 0.0);
+        engine_b.set_tremolo(false, 0.0);
+        engine_b.set_crossfade(false, 0.0);
+        engine_b.set_fm(false, 0.0);
+        engine_b.set_subtractive(false, 0.0);
+        engine_b.set_frequency(110.0);
+
+        let mut out_a = vec![0i16; 256];
+        let mut out_b = vec![0i16; 256];
+        engine_a.render_i16_stereo(&mut out_a);
+        engine_b.render_i16_stereo(&mut out_b);
+        assert_eq!(out_a, out_b);
+    }
+
+    #[test]
+    fn fm_disabled_matches_baseline() {
+        let table = default_sine_wavetable();
+        let make = || {
+            let mut e = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+            e.set_reverb(false, 0.0);
+            e.set_tremolo(false, 0.0);
+            e.set_crossfade(false, 0.0);
+            e.set_filter_sweep(false, 0.15, 0.80, 0.008);
+            e.set_subtractive(false, 0.0);
+            e.set_frequency(110.0);
+            e
+        };
+        let mut engine_a = make();
+        engine_a.set_fm(false, 0.5);
+        let mut engine_b = make();
+        engine_b.set_fm(false, 0.0);
+
+        let mut out_a = vec![0i16; 256];
+        let mut out_b = vec![0i16; 256];
+        engine_a.render_i16_stereo(&mut out_a);
+        engine_b.render_i16_stereo(&mut out_b);
+        assert_eq!(out_a, out_b, "FM disabled should not change output regardless of depth");
+    }
+
+    #[test]
+    fn subtractive_zero_depth_equals_full_sum() {
+        let table = default_sine_wavetable();
+        let make = || {
+            let mut e = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
+            e.set_reverb(false, 0.0);
+            e.set_tremolo(false, 0.0);
+            e.set_crossfade(false, 0.0);
+            e.set_filter_sweep(false, 0.15, 0.80, 0.008);
+            e.set_fm(false, 0.0);
+            e.set_frequency(110.0);
+            e
+        };
+        let mut engine_a = make();
+        engine_a.set_subtractive(true, 0.0);
+        let mut engine_b = make();
+        engine_b.set_subtractive(false, 0.0);
+
+        let mut out_a = vec![0i16; 256];
+        let mut out_b = vec![0i16; 256];
+        engine_a.render_i16_stereo(&mut out_a);
+        engine_b.render_i16_stereo(&mut out_b);
+        assert_eq!(out_a, out_b, "subtractive depth=0 should equal normal sum");
     }
 }

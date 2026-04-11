@@ -5,4 +5,20 @@ root_key = "C"
 root_octave = 2
 fine_tune_cents = 0
 wavetable_dir = "/var/lib/pirate-synth/wavetables"
-spi_device = "/dev/spidev0.0"
+spi_device = "/dev/spidev0.1"
+
+# Audio effects (all feature-flagged, safe to set false if CPU load too high)
+reverb_enabled = true
+reverb_wet = 0.20
+tremolo_enabled = true
+tremolo_depth = 0.35
+crossfade_enabled = true
+crossfade_rate = 0.05
+filter_sweep_enabled = true
+filter_sweep_min = 0.15
+filter_sweep_max = 0.80
+filter_sweep_rate_hz = 0.008
+fm_enabled = false
+fm_depth = 0.15
+subtractive_enabled = false
+subtractive_depth = 0.30

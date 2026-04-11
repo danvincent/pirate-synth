@@ -31,6 +31,40 @@ struct AppConfig {
     wavetable_dir: PathBuf,
     #[serde(default = "default_spi_device")]
     spi_device: String,
+    // Reverb
+    #[serde(default = "default_reverb_enabled")]
+    reverb_enabled: bool,
+    #[serde(default = "default_reverb_wet")]
+    reverb_wet: f32,
+    // Tremolo
+    #[serde(default = "default_tremolo_enabled")]
+    tremolo_enabled: bool,
+    #[serde(default = "default_tremolo_depth")]
+    tremolo_depth: f32,
+    // Crossfade
+    #[serde(default = "default_crossfade_enabled")]
+    crossfade_enabled: bool,
+    #[serde(default = "default_crossfade_rate")]
+    crossfade_rate: f32,
+    // Filter sweep
+    #[serde(default = "default_filter_sweep_enabled")]
+    filter_sweep_enabled: bool,
+    #[serde(default = "default_filter_sweep_min")]
+    filter_sweep_min: f32,
+    #[serde(default = "default_filter_sweep_max")]
+    filter_sweep_max: f32,
+    #[serde(default = "default_filter_sweep_rate_hz")]
+    filter_sweep_rate_hz: f32,
+    // FM
+    #[serde(default)]
+    fm_enabled: bool,
+    #[serde(default = "default_fm_depth")]
+    fm_depth: f32,
+    // Subtractive
+    #[serde(default)]
+    subtractive_enabled: bool,
+    #[serde(default = "default_subtractive_depth")]
+    subtractive_depth: f32,
 }
 
 fn default_sample_rate() -> u32 {
@@ -55,6 +89,43 @@ fn default_spi_device() -> String {
     "/dev/spidev0.1".into()
 }
 
+fn default_reverb_enabled() -> bool {
+    true
+}
+fn default_reverb_wet() -> f32 {
+    0.20
+}
+fn default_tremolo_enabled() -> bool {
+    true
+}
+fn default_tremolo_depth() -> f32 {
+    0.35
+}
+fn default_crossfade_enabled() -> bool {
+    true
+}
+fn default_crossfade_rate() -> f32 {
+    0.05
+}
+fn default_filter_sweep_enabled() -> bool {
+    true
+}
+fn default_filter_sweep_min() -> f32 {
+    0.15
+}
+fn default_filter_sweep_max() -> f32 {
+    0.80
+}
+fn default_filter_sweep_rate_hz() -> f32 {
+    0.008
+}
+fn default_fm_depth() -> f32 {
+    0.15
+}
+fn default_subtractive_depth() -> f32 {
+    0.30
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -67,6 +138,20 @@ impl Default for AppConfig {
             stereo_spread: 0,
             wavetable_dir: default_wavetable_dir(),
             spi_device: default_spi_device(),
+            reverb_enabled: default_reverb_enabled(),
+            reverb_wet: default_reverb_wet(),
+            tremolo_enabled: default_tremolo_enabled(),
+            tremolo_depth: default_tremolo_depth(),
+            crossfade_enabled: default_crossfade_enabled(),
+            crossfade_rate: default_crossfade_rate(),
+            filter_sweep_enabled: default_filter_sweep_enabled(),
+            filter_sweep_min: default_filter_sweep_min(),
+            filter_sweep_max: default_filter_sweep_max(),
+            filter_sweep_rate_hz: default_filter_sweep_rate_hz(),
+            fm_enabled: false,
+            fm_depth: default_fm_depth(),
+            subtractive_enabled: false,
+            subtractive_depth: default_subtractive_depth(),
         }
     }
 }
@@ -122,13 +207,8 @@ fn main() -> Result<()> {
         wavetables.len(),
         config.wavetable_dir.display()
     );
-    let wavetable_names = wavetables
-        .iter()
-        .map(|w| w.name.clone())
-        .collect::<Vec<_>>();
 
-    let mut menu =
-        MenuState::with_wavetables(wavetable_names, config.root_octave, config.fine_tune_cents);
+    let mut menu = MenuState::new(config.root_octave, config.fine_tune_cents);
     menu.key_index = ui::KEY_NAMES
         .iter()
         .position(|k| *k == config.root_key)
@@ -155,6 +235,12 @@ fn main() -> Result<()> {
     engine.set_frequency(initial_hz);
     engine.set_fine_tune_cents(menu.fine_tune_cents);
     engine.set_stereo_spread(menu.stereo_spread);
+    engine.set_reverb(config.reverb_enabled, config.reverb_wet);
+    engine.set_tremolo(config.tremolo_enabled, config.tremolo_depth);
+    engine.set_crossfade(config.crossfade_enabled, config.crossfade_rate);
+    engine.set_filter_sweep(config.filter_sweep_enabled, config.filter_sweep_min, config.filter_sweep_max, config.filter_sweep_rate_hz);
+    engine.set_fm(config.fm_enabled, config.fm_depth);
+    engine.set_subtractive(config.subtractive_enabled, config.subtractive_depth);
     info!("initial frequency set to {:.2} Hz", initial_hz);
 
     let (audio_tx, audio_rx) = command_channel();
@@ -184,7 +270,6 @@ fn main() -> Result<()> {
     loop {
         if let Some(button) = buttons.poll_pressed()? {
             debug!("button press: {:?}", button);
-            let old_wavetable = menu.selected_wavetable;
             let old_key = menu.key_name();
             let old_octave = menu.octave;
             let old_cents = menu.fine_tune_cents;
@@ -192,14 +277,6 @@ fn main() -> Result<()> {
 
             menu.apply_button(button);
             display.draw_menu(&menu)?;
-
-            if menu.selected_wavetable != old_wavetable {
-                if let Err(err) =
-                    audio_tx.try_send(AudioCommand::SetWavetableOffset(menu.selected_wavetable))
-                {
-                    warn!("failed to send wavetable change to audio thread: {err}");
-                }
-            }
 
             if menu.key_name() != old_key || menu.octave != old_octave {
                 let hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
@@ -250,5 +327,18 @@ mod tests {
         assert_eq!(config.sample_rate, 48_000);
         assert_eq!(config.oscillators, 8);
         assert_eq!(config.root_key, "C");
+    }
+
+    #[test]
+    fn load_config_defaults_feature_flags() {
+        let path = PathBuf::from("/tmp/does-not-exist-pirate-synth.toml");
+        let config = load_config(&path).unwrap();
+        assert!(config.reverb_enabled);
+        assert!((config.reverb_wet - 0.20).abs() < 0.001);
+        assert!(config.tremolo_enabled);
+        assert!((config.tremolo_depth - 0.35).abs() < 0.001);
+        assert!(config.crossfade_enabled);
+        assert!(!config.fm_enabled);
+        assert!(!config.subtractive_enabled);
     }
 }

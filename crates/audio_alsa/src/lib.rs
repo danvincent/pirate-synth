@@ -18,6 +18,12 @@ pub enum AudioCommand {
     SetWavetableOffset(usize),
     SetFineTuneCents(f32),
     SetStereoSpread(u8),
+    SetReverb { enabled: bool, wet: f32 },
+    SetTremolo { enabled: bool, depth: f32 },
+    SetCrossfade { enabled: bool, rate: f32 },
+    SetFilterSweep { enabled: bool, min: f32, max: f32, rate_hz: f32 },
+    SetFm { enabled: bool, depth: f32 },
+    SetSubtractive { enabled: bool, depth: f32 },
     Stop,
 }
 
@@ -61,6 +67,12 @@ fn run_audio_loop(
                 AudioCommand::SetWavetableOffset(offset) => engine.set_wavetable_offset(offset),
                 AudioCommand::SetFineTuneCents(cents) => engine.set_fine_tune_cents(cents),
                 AudioCommand::SetStereoSpread(spread) => engine.set_stereo_spread(spread),
+                AudioCommand::SetReverb { enabled, wet } => engine.set_reverb(enabled, wet),
+                AudioCommand::SetTremolo { enabled, depth } => engine.set_tremolo(enabled, depth),
+                AudioCommand::SetCrossfade { enabled, rate } => engine.set_crossfade(enabled, rate),
+                AudioCommand::SetFilterSweep { enabled, min, max, rate_hz } => engine.set_filter_sweep(enabled, min, max, rate_hz),
+                AudioCommand::SetFm { enabled, depth } => engine.set_fm(enabled, depth),
+                AudioCommand::SetSubtractive { enabled, depth } => engine.set_subtractive(enabled, depth),
                 AudioCommand::Stop => {
                     drop(stdin);
                     let _ = child.wait();
