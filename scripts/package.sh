@@ -14,6 +14,7 @@ BUILD_BIN_DIR="$DIST_DIR/.binaries"
 ARMHF_BINARY="$BUILD_BIN_DIR/${BINARY_NAME}-armhf"
 ARMV6_BINARY="$BUILD_BIN_DIR/${BINARY_NAME}-armv6"
 ARMV6_CPU_RUSTFLAGS="-C target-cpu=arm1176jzf-s"
+ARMV6_SOURCE_BINARY="${PIRATE_SYNTH_ARMV6_BINARY:-}"
 
 stage_bundle() {
   local stage_dir="$1"
@@ -46,9 +47,13 @@ mkdir -p "$BUILD_BIN_DIR"
 cargo build --release --target "$TARGET" -p pirate_synth
 install -m 0755 "$ROOT_DIR/target/$TARGET/release/$BINARY_NAME" "$ARMHF_BINARY"
 
-CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_RUSTFLAGS="$ARMV6_CPU_RUSTFLAGS" \
-  cargo build --release --target "$TARGET" -p pirate_synth
-install -m 0755 "$ROOT_DIR/target/$TARGET/release/$BINARY_NAME" "$ARMV6_BINARY"
+if [[ -n "$ARMV6_SOURCE_BINARY" ]]; then
+  install -m 0755 "$ARMV6_SOURCE_BINARY" "$ARMV6_BINARY"
+else
+  CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_RUSTFLAGS="$ARMV6_CPU_RUSTFLAGS" \
+    cargo build --release --target "$TARGET" -p pirate_synth
+  install -m 0755 "$ROOT_DIR/target/$TARGET/release/$BINARY_NAME" "$ARMV6_BINARY"
+fi
 
 stage_bundle "$ARMHF_STAGE_DIR" "$ARMHF_BINARY"
 stage_bundle "$ARMV6_STAGE_DIR" "$ARMV6_BINARY"
