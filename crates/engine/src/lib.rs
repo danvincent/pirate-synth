@@ -317,6 +317,34 @@ fn load_wavetable_file(path: &Path) -> Result<Option<Wavetable>> {
     }))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn load_wavetables_cycles_builtins_when_min_count_exceeds_unique_builtin_count() {
+        let builtin_len = builtin_wavetables().len();
+        let min_count = builtin_len + 1;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("engine_wavetable_test_{unique}"));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let loaded = load_wavetables(&temp_dir, min_count).unwrap();
+
+        let names: HashSet<_> = loaded.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(loaded.len(), min_count);
+        assert_eq!(names.len(), loaded.len());
+
+        fs::remove_dir_all(&temp_dir).unwrap();
+    }
+}
+
 pub fn default_sine_wavetable() -> Wavetable {
     let size = 512;
     let mut samples = Vec::with_capacity(size);
