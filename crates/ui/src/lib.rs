@@ -231,9 +231,7 @@ impl St7789Display {
         self.spi.write_all(&[0x2C])?;
         self.dc.write_value(true)?;
         let bytes = fb.to_bytes();
-        for chunk in bytes.chunks(SPI_FRAMEBUFFER_CHUNK_SIZE) {
-            self.spi.write_all(chunk)?;
-        }
+        write_in_chunks(&mut self.spi, &bytes, SPI_FRAMEBUFFER_CHUNK_SIZE)?;
         Ok(())
     }
 
@@ -251,6 +249,13 @@ impl St7789Display {
         }
         fb.save_ppm(path)
     }
+}
+
+fn write_in_chunks<W: Write>(writer: &mut W, bytes: &[u8], chunk_size: usize) -> Result<()> {
+    for chunk in bytes.chunks(chunk_size) {
+        writer.write_all(chunk)?;
+    }
+    Ok(())
 }
 
 struct Framebuffer {
@@ -455,6 +460,23 @@ fn select_gpio_chip_base(chips: &[(u32, u32, String)], bcm_number: u32) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{self, Write};
+
+    #[derive(Default)]
+    struct RecordingWriter {
+        writes: Vec<Vec<u8>>,
+    }
+
+    impl Write for RecordingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.writes.push(buf.to_vec());
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn menu_navigation_wraps() {
@@ -482,5 +504,19 @@ mod tests {
     fn gpio_chip_base_fallback_is_order_independent() {
         let chips = vec![(512, 54, "other".to_string()), (256, 32, "unknown".to_string())];
         assert_eq!(select_gpio_chip_base(&chips, 5), Some(256));
+    }
+
+    #[test]
+    fn write_in_chunks_preserves_order_and_boundaries() {
+        let data = (0..10).collect::<Vec<u8>>();
+        let mut writer = RecordingWriter::default();
+
+        write_in_chunks(&mut writer, &data, 4).unwrap();
+
+        assert_eq!(
+            writer.writes,
+            vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9]]
+        );
+        assert_eq!(writer.writes.concat(), data);
     }
 }
