@@ -38,3 +38,5 @@ jobs:
           path: |
             dist/pirate-synth-sdcard.tar.gz
             dist/pirate-synth-sdcard.zip
+            dist/pirate-synth-sdcard-armv6.tar.gz
+            dist/pirate-synth-sdcard-armv6.zip

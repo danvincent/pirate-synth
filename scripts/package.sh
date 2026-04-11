@@ -4,29 +4,57 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="arm-unknown-linux-gnueabihf"
 BINARY_NAME="pirate_synth"
-STAGE_DIR="$ROOT_DIR/dist/pirate-synth-sdcard"
+DIST_DIR="$ROOT_DIR/dist"
+ARMHF_BUNDLE_NAME="pirate-synth-sdcard"
+ARMV6_BUNDLE_NAME="pirate-synth-sdcard-armv6"
+ARMHF_STAGE_DIR="$DIST_DIR/$ARMHF_BUNDLE_NAME"
+ARMV6_STAGE_DIR="$DIST_DIR/$ARMV6_BUNDLE_NAME"
 BOOT_SRC="$ROOT_DIR/sdcard/boot/firmware"
-BOOT_DST="$STAGE_DIR/boot/firmware"
+BUILD_BIN_DIR="$DIST_DIR/.binaries"
+ARMHF_BINARY="$BUILD_BIN_DIR/${BINARY_NAME}-armhf"
+ARMV6_BINARY="$BUILD_BIN_DIR/${BINARY_NAME}-armv6"
+ARMV6_RUSTFLAGS="-C target-cpu=arm1176jzf-s"
+
+stage_bundle() {
+  local stage_dir="$1"
+  local bundle_binary="$2"
+  local boot_dst="$stage_dir/boot/firmware"
+
+  rm -rf "$stage_dir"
+  mkdir -p "$boot_dst"
+  cp -a "$BOOT_SRC/." "$boot_dst/"
+  install -m 0755 "$bundle_binary" "$boot_dst/pirate-synth/bin/$BINARY_NAME"
+
+  mkdir -p "$boot_dst/pirate-synth/wavetables"
+  if compgen -G "$ROOT_DIR/assets/wavetables/*" >/dev/null; then
+    cp -a "$ROOT_DIR/assets/wavetables/." "$boot_dst/pirate-synth/wavetables/"
+  fi
+}
+
+archive_bundle() {
+  local bundle_name="$1"
+
+  tar -C "$DIST_DIR" -czf "$DIST_DIR/$bundle_name.tar.gz" "$bundle_name"
+  if command -v zip >/dev/null 2>&1; then
+    (cd "$DIST_DIR" && zip -qr "$bundle_name.zip" "$bundle_name")
+  fi
+}
 
 rustup target add "$TARGET"
 
+mkdir -p "$BUILD_BIN_DIR"
 cargo build --release --target "$TARGET" -p pirate_synth
+install -m 0755 "$ROOT_DIR/target/$TARGET/release/$BINARY_NAME" "$ARMHF_BINARY"
 
-rm -rf "$STAGE_DIR"
-mkdir -p "$BOOT_DST"
-cp -a "$BOOT_SRC/." "$BOOT_DST/"
-install -m 0755 \
-  "$ROOT_DIR/target/$TARGET/release/$BINARY_NAME" \
-  "$BOOT_DST/pirate-synth/bin/$BINARY_NAME"
+CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_RUSTFLAGS="$ARMV6_RUSTFLAGS" \
+  cargo build --release --target "$TARGET" -p pirate_synth
+install -m 0755 "$ROOT_DIR/target/$TARGET/release/$BINARY_NAME" "$ARMV6_BINARY"
 
-mkdir -p "$BOOT_DST/pirate-synth/wavetables"
-if compgen -G "$ROOT_DIR/assets/wavetables/*" >/dev/null; then
-  cp -a "$ROOT_DIR/assets/wavetables/." "$BOOT_DST/pirate-synth/wavetables/"
-fi
+stage_bundle "$ARMHF_STAGE_DIR" "$ARMHF_BINARY"
+stage_bundle "$ARMV6_STAGE_DIR" "$ARMV6_BINARY"
 
-tar -C "$ROOT_DIR/dist" -czf "$ROOT_DIR/dist/pirate-synth-sdcard.tar.gz" pirate-synth-sdcard
-if command -v zip >/dev/null 2>&1; then
-  (cd "$ROOT_DIR/dist" && zip -qr pirate-synth-sdcard.zip pirate-synth-sdcard)
-fi
+archive_bundle "$ARMHF_BUNDLE_NAME"
+archive_bundle "$ARMV6_BUNDLE_NAME"
+rm -rf "$BUILD_BIN_DIR"
 
-echo "Packaged bundle in: $ROOT_DIR/dist"
+echo "Packaged bundles in: $DIST_DIR"

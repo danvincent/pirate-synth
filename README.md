@@ -24,6 +24,13 @@ Outputs:
 
 - `dist/pirate-synth-sdcard.tar.gz`
 - `dist/pirate-synth-sdcard.zip`
+- `dist/pirate-synth-sdcard-armv6.tar.gz`
+- `dist/pirate-synth-sdcard-armv6.zip`
+
+Artifact targets:
+
+- `pirate-synth-sdcard.*`: existing `arm-unknown-linux-gnueabihf` build (armhf Linux target)
+- `pirate-synth-sdcard-armv6.*`: Pi Zero / Zero W compatible build with `target-cpu=arm1176jzf-s` (ARMv6)
 
 ## Copy bundle to SD card boot partition
 
