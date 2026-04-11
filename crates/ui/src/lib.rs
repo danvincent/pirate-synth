@@ -108,7 +108,7 @@ impl MenuState {
         vec![
             format!("KEY: {}", self.key_name()),
             format!("OCT: {}", self.octave),
-            format!("CENTS: {:+.0}", self.fine_tune_cents),
+            format!("CENTS: {:+}", self.fine_tune_cents as i32),
             format!("SPREAD: {}", self.stereo_spread),
         ]
     }
