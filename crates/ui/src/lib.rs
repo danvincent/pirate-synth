@@ -24,25 +24,23 @@ pub enum Button {
 
 #[derive(Clone, Debug)]
 pub struct MenuState {
-    pub wavetables: Vec<String>,
-    pub selected_wavetable: usize,
     pub key_index: usize,
     pub octave: i32,
     pub fine_tune_cents: f32,
     pub stereo_spread: u8,
     pub selected_item: usize,
+    pub scroll_offset: usize,
 }
 
 impl MenuState {
-    pub fn with_wavetables(wavetables: Vec<String>, octave: i32, fine_tune_cents: f32) -> Self {
+    pub fn new(octave: i32, fine_tune_cents: f32) -> Self {
         Self {
-            wavetables,
-            selected_wavetable: 0,
             key_index: 0,
             octave,
             fine_tune_cents,
             stereo_spread: 0,
             selected_item: 0,
+            scroll_offset: 0,
         }
     }
 
@@ -51,10 +49,12 @@ impl MenuState {
     }
 
     pub fn total_items(&self) -> usize {
-        4 + self.wavetables.len().max(1)
+        4
     }
 
     pub fn apply_button(&mut self, button: Button) {
+        const VISIBLE_ROWS: usize = 11;
+        
         match button {
             Button::Up => {
                 if self.selected_item == 0 {
@@ -69,6 +69,13 @@ impl MenuState {
             Button::Select => self.increment_selected_value(),
             Button::Back => self.decrement_selected_value(),
         }
+        
+        // Adjust scroll offset to keep selected_item visible
+        if self.selected_item < self.scroll_offset {
+            self.scroll_offset = self.selected_item;
+        } else if self.selected_item >= self.scroll_offset + VISIBLE_ROWS {
+            self.scroll_offset = self.selected_item + 1 - VISIBLE_ROWS;
+        }
     }
 
     fn increment_selected_value(&mut self) {
@@ -77,10 +84,7 @@ impl MenuState {
             1 => self.octave = (self.octave + 1).min(8),
             2 => self.fine_tune_cents = (self.fine_tune_cents + 1.0).min(100.0),
             3 => self.stereo_spread = (self.stereo_spread + 5).min(100),
-            index => {
-                let wavetable_items = self.wavetables.len().max(1);
-                self.selected_wavetable = (index - 4).min(wavetable_items - 1);
-            }
+            _ => {}
         }
     }
 
@@ -101,27 +105,12 @@ impl MenuState {
     }
 
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec![
+        vec![
             format!("KEY: {}", self.key_name()),
             format!("OCT: {}", self.octave),
             format!("CENTS: {:+.0}", self.fine_tune_cents),
             format!("SPREAD: {}", self.stereo_spread),
-        ];
-
-        if self.wavetables.is_empty() {
-            lines.push("WT: (default sine)".to_string());
-        } else {
-            for (index, wavetable) in self.wavetables.iter().enumerate() {
-                let prefix = if index == self.selected_wavetable {
-                    "WT:*"
-                } else {
-                    "WT: "
-                };
-                lines.push(format!("{prefix}{wavetable}"));
-            }
-        }
-
-        lines
+        ]
     }
 }
 
@@ -238,17 +227,22 @@ impl St7789Display {
     }
 
     pub fn draw_menu(&mut self, state: &MenuState) -> Result<()> {
+        const VISIBLE_ROWS: usize = 11;
+        
         let mut fb = Framebuffer::new(240, 240);
         fb.clear(0x0000);
         fb.draw_text(8, 8, "PIRATE SYNTH", 0xFFFF, 0x0000);
 
         for (index, line) in state.lines().iter().enumerate() {
-            let y = 28 + (index as i32 * 18);
-            let selected = index == state.selected_item;
-            let bg = if selected { 0x07E0 } else { 0x0000 };
-            let fg = if selected { 0x0000 } else { 0xFFFF };
-            fb.fill_rect(4, y - 2, 232, 14, bg);
-            fb.draw_text(8, y, line, fg, bg);
+            if index >= state.scroll_offset && index < state.scroll_offset + VISIBLE_ROWS {
+                let visual_row = index - state.scroll_offset;
+                let y = 28 + (visual_row as i32 * 18);
+                let selected = index == state.selected_item;
+                let bg = if selected { 0x07E0 } else { 0x0000 };
+                let fg = if selected { 0x0000 } else { 0xFFFF };
+                fb.fill_rect(4, y - 2, 232, 14, bg);
+                fb.draw_text(8, y, line, fg, bg);
+            }
         }
 
         self.command(0x2A, &[0x00, 0x00, 0x00, 0xEF])?;
@@ -270,16 +264,21 @@ impl St7789Display {
     }
 
     pub fn draw_menu_to_ppm(state: &MenuState, path: &Path) -> Result<()> {
+        const VISIBLE_ROWS: usize = 11;
+        
         let mut fb = Framebuffer::new(240, 240);
         fb.clear(0x0000);
         fb.draw_text(8, 8, "PIRATE SYNTH", 0xFFFF, 0x0000);
         for (index, line) in state.lines().iter().enumerate() {
-            let y = 28 + (index as i32 * 18);
-            let selected = index == state.selected_item;
-            let bg = if selected { 0x07E0 } else { 0x0000 };
-            let fg = if selected { 0x0000 } else { 0xFFFF };
-            fb.fill_rect(4, y - 2, 232, 14, bg);
-            fb.draw_text(8, y, line, fg, bg);
+            if index >= state.scroll_offset && index < state.scroll_offset + VISIBLE_ROWS {
+                let visual_row = index - state.scroll_offset;
+                let y = 28 + (visual_row as i32 * 18);
+                let selected = index == state.selected_item;
+                let bg = if selected { 0x07E0 } else { 0x0000 };
+                let fg = if selected { 0x0000 } else { 0xFFFF };
+                fb.fill_rect(4, y - 2, 232, 14, bg);
+                fb.draw_text(8, y, line, fg, bg);
+            }
         }
         fb.save_ppm(path)
     }
@@ -418,9 +417,45 @@ mod tests {
 
     #[test]
     fn menu_navigation_wraps() {
-        let mut menu = MenuState::with_wavetables(vec!["a".to_string()], 2, 0.0);
+        let mut menu = MenuState::new(2, 0.0);
         menu.apply_button(Button::Up);
         assert_eq!(menu.selected_item, menu.total_items() - 1);
+    }
+
+    #[test]
+    fn menu_has_four_items_only() {
+        let menu = MenuState::new(2, 0.0);
+        assert_eq!(menu.total_items(), 4);
+        assert_eq!(menu.lines().len(), 4);
+    }
+
+    #[test]
+    fn menu_scroll_offset_initialized_to_zero() {
+        let menu = MenuState::new(2, 0.0);
+        assert_eq!(menu.scroll_offset, 0);
+    }
+
+    #[test]
+    fn menu_scroll_stays_zero_with_four_items() {
+        let mut menu = MenuState::new(2, 0.0);
+        for _ in 0..20 {
+            menu.apply_button(Button::Down);
+        }
+        assert_eq!(menu.scroll_offset, 0);
+    }
+
+    #[test]
+    fn menu_lines_contains_key_oct_cents_spread() {
+        let mut menu = MenuState::new(2, 0.0);
+        menu.key_index = 0;
+        menu.octave = 3;
+        menu.fine_tune_cents = 5.5;
+        menu.stereo_spread = 25;
+        let lines = menu.lines();
+        assert_eq!(lines[0], "KEY: C");
+        assert_eq!(lines[1], "OCT: 3");
+        assert_eq!(lines[2], "CENTS: +5");
+        assert_eq!(lines[3], "SPREAD: 25");
     }
 
     #[test]
