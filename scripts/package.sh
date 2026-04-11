@@ -19,7 +19,10 @@ install -m 0755 \
   "$ROOT_DIR/target/$TARGET/release/$BINARY_NAME" \
   "$BOOT_DST/pirate-synth/bin/$BINARY_NAME"
 
-cp -a "$ROOT_DIR/assets/wavetables/." "$BOOT_DST/pirate-synth/wavetables/"
+mkdir -p "$BOOT_DST/pirate-synth/wavetables"
+if compgen -G "$ROOT_DIR/assets/wavetables/*" >/dev/null; then
+  cp -a "$ROOT_DIR/assets/wavetables/." "$BOOT_DST/pirate-synth/wavetables/"
+fi
 
 tar -C "$ROOT_DIR/dist" -czf "$ROOT_DIR/dist/pirate-synth-sdcard.tar.gz" pirate-synth-sdcard
 if command -v zip >/dev/null 2>&1; then
