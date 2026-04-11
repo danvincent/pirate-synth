@@ -392,11 +392,6 @@ impl SysfsPin {
 }
 
 fn resolve_sysfs_gpio_number(bcm_number: u32) -> Result<u32> {
-    let direct_path = format!("/sys/class/gpio/gpio{}", bcm_number);
-    if Path::new(&direct_path).exists() {
-        return Ok(bcm_number);
-    }
-
     let mut chips = Vec::new();
     for entry in fs::read_dir("/sys/class/gpio").context("failed to read /sys/class/gpio")? {
         let entry = entry?;
@@ -428,6 +423,8 @@ fn resolve_sysfs_gpio_number(bcm_number: u32) -> Result<u32> {
     Ok(base.map_or(bcm_number, |gpio_base| gpio_base + bcm_number))
 }
 
+const SOC_GPIO_LABEL_HINTS: [&str; 3] = ["bcm", "pinctrl", "raspberrypi"];
+
 fn select_gpio_chip_base(chips: &[(u32, u32, String)], bcm_number: u32) -> Option<u32> {
     let mut preferred = None;
     let mut fallback = None;
@@ -436,12 +433,13 @@ fn select_gpio_chip_base(chips: &[(u32, u32, String)], bcm_number: u32) -> Optio
         if *ngpio <= bcm_number {
             continue;
         }
-        if fallback.is_none() {
-            fallback = Some(*base);
-        }
-        if label.contains("bcm") || label.contains("pinctrl") || label.contains("raspberrypi") {
-            preferred = Some(*base);
-            break;
+        fallback = Some(fallback.map_or(*base, |current: u32| current.min(*base)));
+
+        if SOC_GPIO_LABEL_HINTS
+            .iter()
+            .any(|hint| label.contains(hint))
+        {
+            preferred = Some(preferred.map_or(*base, |current: u32| current.min(*base)));
         }
     }
 
@@ -471,6 +469,12 @@ mod tests {
     #[test]
     fn gpio_chip_base_falls_back_to_first_matching_chip() {
         let chips = vec![(256, 32, "unknown".to_string()), (512, 54, "other".to_string())];
+        assert_eq!(select_gpio_chip_base(&chips, 5), Some(256));
+    }
+
+    #[test]
+    fn gpio_chip_base_fallback_is_order_independent() {
+        let chips = vec![(512, 54, "other".to_string()), (256, 32, "unknown".to_string())];
         assert_eq!(select_gpio_chip_base(&chips, 5), Some(256));
     }
 }
