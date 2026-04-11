@@ -56,6 +56,9 @@ jobs:
             cargo build --release -p pirate_synth
             install -Dm 0755 target/release/pirate_synth dist/pirate_synth-armv6-native
 
+      - name: Fix workspace permissions after ARMv6 container build
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/dist"
+
       - name: Package SD bundle
         run: PIRATE_SYNTH_ARMV6_BINARY="$GITHUB_WORKSPACE/dist/pirate_synth-armv6-native" ./scripts/package.sh
 
