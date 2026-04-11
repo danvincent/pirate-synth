@@ -29,6 +29,7 @@ pub struct MenuState {
     pub key_index: usize,
     pub octave: i32,
     pub fine_tune_cents: f32,
+    pub stereo_spread: u8,
     pub selected_item: usize,
 }
 
@@ -40,6 +41,7 @@ impl MenuState {
             key_index: 0,
             octave,
             fine_tune_cents,
+            stereo_spread: 0,
             selected_item: 0,
         }
     }
@@ -49,7 +51,7 @@ impl MenuState {
     }
 
     pub fn total_items(&self) -> usize {
-        3 + self.wavetables.len().max(1)
+        4 + self.wavetables.len().max(1)
     }
 
     pub fn apply_button(&mut self, button: Button) {
@@ -74,9 +76,10 @@ impl MenuState {
             0 => self.key_index = (self.key_index + 1) % KEY_NAMES.len(),
             1 => self.octave = (self.octave + 1).min(8),
             2 => self.fine_tune_cents = (self.fine_tune_cents + 1.0).min(100.0),
+            3 => self.stereo_spread = (self.stereo_spread + 5).min(100),
             index => {
                 let wavetable_items = self.wavetables.len().max(1);
-                self.selected_wavetable = (index - 3).min(wavetable_items - 1);
+                self.selected_wavetable = (index - 4).min(wavetable_items - 1);
             }
         }
     }
@@ -92,6 +95,7 @@ impl MenuState {
             }
             1 => self.octave = (self.octave - 1).max(0),
             2 => self.fine_tune_cents = (self.fine_tune_cents - 1.0).max(-100.0),
+            3 => self.stereo_spread = self.stereo_spread.saturating_sub(5),
             _ => {}
         }
     }
@@ -101,6 +105,7 @@ impl MenuState {
             format!("KEY: {}", self.key_name()),
             format!("OCT: {}", self.octave),
             format!("CENTS: {:+.0}", self.fine_tune_cents),
+            format!("SPREAD: {}", self.stereo_spread),
         ];
 
         if self.wavetables.is_empty() {
@@ -200,11 +205,16 @@ impl St7789Display {
     }
 
     fn init(&mut self) -> Result<()> {
-        self.command(0x11, &[])?; // sleep out
-        self.command(0x3A, &[0x55])?; // RGB565
-        self.command(0x36, &[0x60])?; // rotation
-        self.command(0x21, &[])?; // display inversion on
-        self.command(0x29, &[])?; // display on
+        self.command(0x01, &[])?;  // SWRESET
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        self.command(0x11, &[])?;  // SLPOUT
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        self.command(0x3A, &[0x55])?;  // COLMOD RGB565
+        self.command(0x36, &[0x00])?;  // MADCTL default orientation
+        self.command(0x21, &[])?;      // INVON
+        self.command(0x13, &[])?;      // NORON
+        self.command(0x29, &[])?;      // DISPON
+        std::thread::sleep(std::time::Duration::from_millis(10));
         if let Some(backlight) = &mut self.backlight {
             backlight.set_high();
         }
