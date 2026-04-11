@@ -66,7 +66,7 @@ impl Engine {
             let center = (oscillator_count.saturating_sub(1) as f32) / 2.0;
             let cents = (i as f32 - center) * 4.0;
             
-            let mut rng_state = (sample_rate as u64).wrapping_mul(0xdeadbeef).wrapping_add(i as u64 * 0x9e3779b97f4a7c15);
+            let mut rng_state = (sample_rate as u64).wrapping_mul(0xdeadbeef).wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15));
             let drift_lfo_start = lcg_next(&mut rng_state) as f32 / u32::MAX as f32;
             let drift_lfo_rate = 0.05 + (lcg_next(&mut rng_state) as f32 / u32::MAX as f32) * 0.45;
             
