@@ -1,0 +1,12 @@
+[Unit]
+Description=Pirate Synth service
+After=sound.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pirate_synth
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

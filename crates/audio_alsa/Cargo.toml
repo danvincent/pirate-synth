@@ -1,0 +1,10 @@
+[package]
+name = "audio_alsa"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+crossbeam-channel = "0.5"
+engine = { path = "../engine" }
