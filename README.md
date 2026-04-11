@@ -29,7 +29,7 @@ Outputs:
 
 Artifact targets:
 
-- `pirate-synth-sdcard.*`: existing `arm-unknown-linux-gnueabihf` build (ARMv7+ armhf Linux target)
+- `pirate-synth-sdcard.*`: existing `arm-unknown-linux-gnueabihf` build (ARMv7+ armhf Linux target, e.g. Pi 2/3/4 running 32-bit Raspberry Pi OS)
 - `pirate-synth-sdcard-armv6.*`: Pi Zero / Zero W compatible build with `target-cpu=arm1176jzf-s` (ARMv6)
 
 ## Copy bundle to SD card boot partition
