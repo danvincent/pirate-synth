@@ -1,0 +1,87 @@
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::thread;
+
+use anyhow::{Context, Result};
+use crossbeam_channel::{Receiver, Sender};
+use engine::Engine;
+
+#[derive(Clone, Debug)]
+pub struct AudioConfig {
+    pub sample_rate: u32,
+    pub buffer_frames: usize,
+}
+
+#[derive(Clone, Debug)]
+pub enum AudioCommand {
+    SetFrequencyHz(f32),
+    SetWavetableOffset(usize),
+    Stop,
+}
+
+pub fn spawn_audio_thread(
+    mut engine: Engine,
+    config: AudioConfig,
+    command_rx: Receiver<AudioCommand>,
+) -> thread::JoinHandle<Result<()>> {
+    thread::spawn(move || run_audio_loop(&mut engine, &config, command_rx))
+}
+
+fn run_audio_loop(
+    engine: &mut Engine,
+    config: &AudioConfig,
+    command_rx: Receiver<AudioCommand>,
+) -> Result<()> {
+    let mut child = Command::new("aplay")
+        .args([
+            "-q",
+            "-f",
+            "S16_LE",
+            "-c",
+            "2",
+            "-r",
+            &config.sample_rate.to_string(),
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("failed to start aplay (alsa-utils)")?;
+
+    let mut stdin = child.stdin.take().context("failed to open aplay stdin")?;
+
+    let mut buffer = vec![0i16; config.buffer_frames * 2];
+    let mut bytes = vec![0u8; config.buffer_frames * 4];
+
+    loop {
+        while let Ok(command) = command_rx.try_recv() {
+            match command {
+                AudioCommand::SetFrequencyHz(freq) => engine.set_frequency(freq),
+                AudioCommand::SetWavetableOffset(offset) => engine.set_wavetable_offset(offset),
+                AudioCommand::Stop => {
+                    drop(stdin);
+                    let _ = child.wait();
+                    return Ok(());
+                }
+            }
+        }
+
+        engine.render_i16_stereo(&mut buffer);
+        i16_to_le_bytes(&buffer, &mut bytes);
+        stdin
+            .write_all(&bytes)
+            .context("failed streaming PCM to aplay")?;
+    }
+}
+
+fn i16_to_le_bytes(samples: &[i16], out: &mut [u8]) {
+    for (index, sample) in samples.iter().enumerate() {
+        let bytes = sample.to_le_bytes();
+        let offset = index * 2;
+        out[offset] = bytes[0];
+        out[offset + 1] = bytes[1];
+    }
+}
+
+pub fn command_channel() -> (Sender<AudioCommand>, Receiver<AudioCommand>) {
+    crossbeam_channel::bounded(32)
+}

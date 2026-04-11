@@ -1,0 +1,37 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev \
+            gcc-arm-linux-gnueabihf \
+            libc6-dev-armhf-cross \
+            zip
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run focused tests
+        run: cargo test -p engine -p ui
+
+      - name: Package SD bundle
+        run: ./scripts/package.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pirate-synth-sdcard
+          path: |
+            dist/pirate-synth-sdcard.tar.gz
+            dist/pirate-synth-sdcard.zip

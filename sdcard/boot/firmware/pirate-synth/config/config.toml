@@ -1,0 +1,8 @@
+sample_rate = 48000
+buffer_frames = 256
+oscillators = 8
+root_key = "C"
+root_octave = 2
+fine_tune_cents = 0
+wavetable_dir = "/var/lib/pirate-synth/wavetables"
+spi_device = "/dev/spidev0.0"
