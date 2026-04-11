@@ -79,10 +79,26 @@ jobs:
           fi
 
           ARMV6_ATTRS="$(readelf -A "$ARMV6_BIN")"
-          echo "$ARMV6_ATTRS" | egrep 'Tag_CPU_name|Tag_CPU_arch|Tag_THUMB_ISA_use|Tag_FP_arch'
+          # Always print key attributes to make CI failures diagnosable from logs.
+          echo "$ARMV6_ATTRS" | grep -E 'Tag_CPU_name|Tag_CPU_arch|Tag_THUMB_ISA_use|Tag_FP_arch'
 
-          if echo "$ARMV6_ATTRS" | grep -Eq 'Tag_CPU_arch:[[:space:]]*v7|Tag_CPU_name:[[:space:]]*"7-A"|Tag_THUMB_ISA_use:[[:space:]]*Thumb-2|Tag_FP_arch:[[:space:]]*VFPv3'; then
-            echo "armv6 artifact reports ARMv7/Thumb-2/VFPv3 attributes"
+          if echo "$ARMV6_ATTRS" | grep -Eq 'Tag_CPU_arch:[[:space:]]*v7'; then
+            echo "armv6 artifact reports ARMv7 CPU architecture"
+            exit 1
+          fi
+
+          if echo "$ARMV6_ATTRS" | grep -Eq 'Tag_CPU_name:[[:space:]]*"7-A"'; then
+            echo "armv6 artifact reports ARMv7-A CPU name"
+            exit 1
+          fi
+
+          if echo "$ARMV6_ATTRS" | grep -Eq 'Tag_THUMB_ISA_use:[[:space:]]*Thumb-2'; then
+            echo "armv6 artifact reports Thumb-2 ISA usage"
+            exit 1
+          fi
+
+          if echo "$ARMV6_ATTRS" | grep -Eq 'Tag_FP_arch:[[:space:]]*VFPv3'; then
+            echo "armv6 artifact reports VFPv3 floating-point ISA"
             exit 1
           fi
 
