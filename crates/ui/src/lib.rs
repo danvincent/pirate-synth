@@ -5,6 +5,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use font8x8::UnicodeFonts;
 
+const SPI_FRAMEBUFFER_CHUNK_SIZE: usize = 4096;
+
 pub const KEY_NAMES: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
@@ -227,7 +229,10 @@ impl St7789Display {
         self.dc.write_value(false)?;
         self.spi.write_all(&[0x2C])?;
         self.dc.write_value(true)?;
-        self.spi.write_all(&fb.to_bytes())?;
+        let bytes = fb.to_bytes();
+        for chunk in bytes.chunks(SPI_FRAMEBUFFER_CHUNK_SIZE) {
+            self.spi.write_all(chunk)?;
+        }
         Ok(())
     }
 
