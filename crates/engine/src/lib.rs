@@ -265,14 +265,25 @@ pub fn load_wavetables(wavetable_dir: &Path, min_count: usize) -> Result<Vec<Wav
             }
         }
         // Second pass: if min_count > number of unique built-ins, cycle through
-        // built-ins again with an index suffix to guarantee uniqueness
+        // built-ins again with an index suffix, checking against existing names
+        // to guarantee uniqueness even when user files already use suffixed names.
         if out.len() < min_count {
             let builtins = builtin_wavetables();
             let mut cycle = 0usize;
             while out.len() < min_count {
                 let b = &builtins[cycle % builtins.len()];
-                let name = format!("{}{}", b.name, cycle / builtins.len() + 2);
-                out.push(Wavetable { name, samples: b.samples.clone() });
+                let mut suffix = cycle / builtins.len() + 2;
+                let name = loop {
+                    let candidate = format!("{}{}", b.name, suffix);
+                    if !out.iter().any(|w| w.name == candidate) {
+                        break candidate;
+                    }
+                    suffix += 1;
+                };
+                out.push(Wavetable {
+                    name,
+                    samples: b.samples.clone(),
+                });
                 cycle += 1;
             }
         }
