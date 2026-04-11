@@ -132,6 +132,7 @@ impl Engine {
     }
 
     pub fn set_stereo_spread(&mut self, spread: u8) {
+        let spread = spread.min(100);
         self.stereo_spread = spread;
         let spread_f = spread as f32 / 100.0;
         let n = self.oscillators.len();
@@ -181,14 +182,15 @@ impl Engine {
 
                 let incr = (osc.current_base_hz * osc.detune_ratio * drift_ratio) / self.sample_rate as f32;
                 let new_phase = osc.phase + incr;
-                if new_phase >= 1.0 {
+                let cycles_completed = new_phase.floor() as u32;
+                if cycles_completed > 0 {
                     if let Some(pending_hz) = osc.pending_base_hz {
-                        if osc.delay_cycles_remaining <= 1 {
+                        if osc.delay_cycles_remaining <= cycles_completed {
                             osc.current_base_hz = pending_hz;
                             osc.pending_base_hz = None;
                             osc.delay_cycles_remaining = 0;
                         } else {
-                            osc.delay_cycles_remaining -= 1;
+                            osc.delay_cycles_remaining -= cycles_completed;
                         }
                     }
                 }
@@ -253,12 +255,25 @@ pub fn load_wavetables(wavetable_dir: &Path, min_count: usize) -> Result<Vec<Wav
     }
 
     if out.len() < min_count {
+        // First pass: add unique built-ins by name
         for builtin in builtin_wavetables() {
             if out.len() >= min_count {
                 break;
             }
             if !out.iter().any(|w| w.name == builtin.name) {
                 out.push(builtin);
+            }
+        }
+        // Second pass: if min_count > number of unique built-ins, cycle through
+        // built-ins again with an index suffix to guarantee uniqueness
+        if out.len() < min_count {
+            let builtins = builtin_wavetables();
+            let mut cycle = 0usize;
+            while out.len() < min_count {
+                let b = &builtins[cycle % builtins.len()];
+                let name = format!("{}{}", b.name, cycle / builtins.len() + 2);
+                out.push(Wavetable { name, samples: b.samples.clone() });
+                cycle += 1;
             }
         }
     }
@@ -491,8 +506,9 @@ mod tests {
 
     #[test]
     fn load_wavetables_pads_to_min_count() {
-        let dir = std::env::temp_dir().join("pirate_synth_test_empty");
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = std::env::temp_dir().join(format!("pirate_synth_test_empty_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
         let result = load_wavetables(&dir, 8).unwrap();
         assert_eq!(result.len(), 8);
         let names: std::collections::HashSet<_> = result.iter().map(|w| w.name.as_str()).collect();
