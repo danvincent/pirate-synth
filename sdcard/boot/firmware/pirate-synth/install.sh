@@ -54,14 +54,18 @@ systemctl mask bluetooth.service hciuart.service ModemManager.service 2>/dev/nul
 # suppresses the associated socket chatter.
 systemctl mask avahi-daemon.service avahi-daemon.socket 2>/dev/null || true
 
-# Prevent apt background upgrade timers from firing during normal synth use.
-systemctl disable apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+# Avoid apt background activity contending with this first-boot install
+# session, but keep unattended/security updates enabled on future boots.
+systemctl stop apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
 
 # SSH socket activation: sshd only forks a process when a connection arrives,
 # so it becomes "available" in milliseconds rather than ~3 s at boot.
 # WiFi must still come up before clients can connect – no functional change.
-systemctl disable ssh.service 2>/dev/null || true
-systemctl enable ssh.socket 2>/dev/null || true
+if systemctl enable ssh.socket 2>/dev/null; then
+  systemctl disable ssh.service 2>/dev/null || true
+else
+  echo "ssh.socket not available; leaving ssh.service unchanged"
+fi
 
 touch "$SENTINEL"
 

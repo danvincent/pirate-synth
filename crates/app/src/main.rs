@@ -389,10 +389,12 @@ fn main() -> Result<()> {
                     warn!("failed to send fine tune cents to audio thread: {err}");
                 }
                 // Also send SetScale since spread_percent changed
-                let _ = audio_tx.try_send(AudioCommand::SetScale {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
                     mode: scale_mode_from_index(menu.scale_index),
                     spread_percent: menu.fine_tune_cents,
-                });
+                }) {
+                    warn!("failed to send scale update to audio thread: {err}");
+                }
             }
 
             if menu.stereo_spread != old_spread {
@@ -402,10 +404,12 @@ fn main() -> Result<()> {
             }
 
             if menu.scale_index != old_scale {
-                let _ = audio_tx.try_send(AudioCommand::SetScale {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
                     mode: scale_mode_from_index(menu.scale_index),
                     spread_percent: menu.fine_tune_cents,
-                });
+                }) {
+                    warn!("failed to send scale update to audio thread: {err}");
+                }
             }
         }
 

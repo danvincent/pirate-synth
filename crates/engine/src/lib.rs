@@ -349,21 +349,23 @@ impl Engine {
     }
 
     pub fn set_fm(&mut self, enabled: bool, depth: f32) {
+        let was_enabled = self.fm_enabled;
         self.fm_enabled = enabled;
         self.fm_depth = depth.clamp(0.0, 1.0);
-        if enabled {
+        if !was_enabled && enabled {
             self.fm_depth_ramp = 0.0;  // Start ramp from 0 when enabling
-        } else {
+        } else if was_enabled && !enabled {
             self.fm_depth_ramp = 0.0;  // Snap to 0 when disabling
         }
     }
 
     pub fn set_subtractive(&mut self, enabled: bool, depth: f32) {
+        let was_enabled = self.subtractive_enabled;
         self.subtractive_enabled = enabled;
         self.subtractive_depth = depth.clamp(0.0, 1.0);
-        if enabled {
+        if !was_enabled && enabled {
             self.subtractive_depth_ramp = 0.0;  // Start ramp from 0 when enabling
-        } else {
+        } else if was_enabled && !enabled {
             self.subtractive_depth_ramp = 0.0;  // Snap to 0 when disabling
         }
     }
@@ -397,15 +399,16 @@ impl Engine {
                     };
                     let target_cents = t * half_spread;
                     
-                    // Find nearest scale degree (in cents = semitone * 100)
-                    // Scale degrees can span multiple octaves if spread > 1200
+                    // Find nearest scale degree (in cents = semitone * 100).
+                    // spread_percent is clamped to 100%, so target_cents stays within
+                    // +/- 600 cents and only base + adjacent octaves need checking.
                     let nearest_cents = semitones.iter().map(|&st| {
                         let base = (st * 100) as f32;
                         // Also check octave multiples to find truly nearest
                         let mut best = base;
                         let mut best_dist = (base - target_cents).abs();
                         // Check adjacent octaves
-                        for octave_offset in [-2400.0f32, -1200.0, 0.0, 1200.0, 2400.0] {
+                        for octave_offset in [-1200.0f32, 0.0, 1200.0] {
                             let candidate = base + octave_offset;
                             let dist = (candidate - target_cents).abs();
                             if dist < best_dist {
@@ -452,13 +455,28 @@ impl Engine {
                     if osc_idx % 2 == 1 {
                         // peek at current sample without advancing phase
                         let cur_idx = (self.wavetable_offset + self.xfade_index_offset + osc_idx) % table_count;
-                        let table = &self.wavetables[cur_idx].samples;
-                        let len = table.len() as f32;
-                        let phase_pos = osc.phase * len;
-                        let i0 = phase_pos as usize % table.len();
-                        let i1 = (i0 + 1) % table.len();
-                        let frac = phase_pos - (i0 as f32);
-                        acc += table[i0] * (1.0 - frac) + table[i1] * frac;
+                        let next_idx = (cur_idx + 1) % table_count;
+                        let cur_table = &self.wavetables[cur_idx].samples;
+                        let len_cur = cur_table.len() as f32;
+                        let phase_pos_cur = osc.phase * len_cur;
+                        let i0c = phase_pos_cur as usize % cur_table.len();
+                        let i1c = (i0c + 1) % cur_table.len();
+                        let frac_c = phase_pos_cur - (i0c as f32);
+                        let s_cur = cur_table[i0c] * (1.0 - frac_c) + cur_table[i1c] * frac_c;
+
+                        let s = if self.crossfade_enabled && self.xfade_t > 0.0 {
+                            let next_table = &self.wavetables[next_idx].samples;
+                            let len_next = next_table.len() as f32;
+                            let phase_pos_next = osc.phase * len_next;
+                            let i0n = phase_pos_next as usize % next_table.len();
+                            let i1n = (i0n + 1) % next_table.len();
+                            let frac_n = phase_pos_next - (i0n as f32);
+                            let s_next = next_table[i0n] * (1.0 - frac_n) + next_table[i1n] * frac_n;
+                            s_cur * (1.0 - self.xfade_t) + s_next * self.xfade_t
+                        } else {
+                            s_cur
+                        };
+                        acc += s;
                     }
                 }
                 acc
@@ -1342,6 +1360,27 @@ mod tests {
     }
 
     #[test]
+    fn fm_depth_update_while_enabled_does_not_reset_ramp() {
+        let table = default_sine_wavetable();
+        let mut engine = Engine::new(48_000, 4, vec![table.clone(); 4]).unwrap();
+        engine.set_reverb(false, 0.0);
+        engine.set_tremolo(false, 0.0);
+        engine.set_crossfade(false, 0.0);
+        engine.set_filter_sweep(false, 0.15, 0.80, 0.008);
+        engine.set_subtractive(false, 0.0);
+        engine.set_frequency(110.0);
+
+        engine.set_fm(true, 0.6);
+        let mut out = vec![0i16; 4800];
+        engine.render_i16_stereo(&mut out);
+        assert!(engine.fm_depth_ramp > 0.0);
+        let ramp_before = engine.fm_depth_ramp;
+
+        engine.set_fm(true, 0.4);
+        assert!(engine.fm_depth_ramp >= ramp_before, "updating FM depth while enabled should not reset ramp");
+    }
+
+    #[test]
     fn subtractive_ramp_smoothly_increases_on_enable() {
         let table = default_sine_wavetable();
         let mut engine = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table.clone()]).unwrap();
@@ -1390,6 +1429,30 @@ mod tests {
     }
 
     #[test]
+    fn subtractive_depth_update_while_enabled_does_not_reset_ramp() {
+        let table = default_sine_wavetable();
+        let mut engine = Engine::new(48_000, 4, vec![table.clone(); 4]).unwrap();
+        engine.set_reverb(false, 0.0);
+        engine.set_tremolo(false, 0.0);
+        engine.set_crossfade(false, 0.0);
+        engine.set_filter_sweep(false, 0.15, 0.80, 0.008);
+        engine.set_fm(false, 0.0);
+        engine.set_frequency(110.0);
+
+        engine.set_subtractive(true, 0.4);
+        let mut out = vec![0i16; 4800];
+        engine.render_i16_stereo(&mut out);
+        assert!(engine.subtractive_depth_ramp > 0.0);
+        let ramp_before = engine.subtractive_depth_ramp;
+
+        engine.set_subtractive(true, 0.2);
+        assert!(
+            engine.subtractive_depth_ramp >= ramp_before,
+            "updating subtractive depth while enabled should not reset ramp"
+        );
+    }
+
+    #[test]
     fn fm_staircase_even_oscillators_use_consistent_fm() {
         // Test that all even-indexed oscillators use the same FM modulation
         // This would require introspection into the engine state which isn't currently exposed.
@@ -1407,6 +1470,34 @@ mod tests {
         engine.render_i16_stereo(&mut out);
         // Should produce output without panicking
         assert!(out.iter().any(|&s| s != 0), "FM should produce output");
+    }
+
+    #[test]
+    fn fm_prepass_uses_crossfaded_sample() {
+        let table_zero = Wavetable { name: "zero".to_string(), samples: vec![0.0; 8] };
+        let table_one = Wavetable { name: "one".to_string(), samples: vec![1.0; 8] };
+        let mut engine = Engine::new(48_000, 2, vec![table_zero, table_one]).unwrap();
+        engine.set_reverb(false, 0.0);
+        engine.set_tremolo(false, 0.0);
+        engine.set_filter_sweep(false, 0.15, 0.80, 0.008);
+        engine.set_subtractive(false, 0.0);
+        engine.set_crossfade(true, 0.0);
+        engine.xfade_t = 1.0;
+        engine.set_fm(true, 0.1);
+        engine.fm_depth_ramp = 0.1;
+        engine.set_frequency(1.0);
+
+        let even_phase_before = engine.oscillators[0].phase;
+        let mut out = vec![0i16; 2];
+        engine.render_i16_stereo(&mut out);
+        let even_phase_after = engine.oscillators[0].phase;
+
+        // At xfade_t=1.0 odd oscillator sample should come from next table (0.0),
+        // so FM contribution is near zero and even oscillator advance stays tiny.
+        assert!(
+            even_phase_after - even_phase_before < 0.01,
+            "FM pre-pass should use crossfaded odd sample"
+        );
     }
 
     fn make_engine_n(n: usize) -> Engine {
