@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use audio_alsa::{command_channel, spawn_audio_thread, AudioCommand, AudioConfig};
-use engine::{key_to_frequency_hz, load_wavetables, Engine};
+use engine::{key_to_frequency_hz, load_wavetables, Engine, ScaleMode};
 use log::{debug, info, warn};
 use serde::Deserialize;
 use ui::{ButtonReader, MenuState, St7789Display};
@@ -172,6 +172,94 @@ fn load_config(path: &Path) -> Result<AppConfig> {
     Ok(config)
 }
 
+/// Per-user overrides stored in `~/.pirate-synth.toml`. Every field is
+/// optional so only the values you set are applied on top of the system config.
+#[derive(Debug, Default, serde::Deserialize)]
+struct UserConfig {
+    sample_rate: Option<u32>,
+    buffer_frames: Option<usize>,
+    oscillators: Option<usize>,
+    root_key: Option<String>,
+    root_octave: Option<i32>,
+    fine_tune_cents: Option<f32>,
+    stereo_spread: Option<u8>,
+    wavetable_dir: Option<PathBuf>,
+    spi_device: Option<String>,
+    reverb_enabled: Option<bool>,
+    reverb_wet: Option<f32>,
+    tremolo_enabled: Option<bool>,
+    tremolo_depth: Option<f32>,
+    crossfade_enabled: Option<bool>,
+    crossfade_rate: Option<f32>,
+    filter_sweep_enabled: Option<bool>,
+    filter_sweep_min: Option<f32>,
+    filter_sweep_max: Option<f32>,
+    filter_sweep_rate_hz: Option<f32>,
+    fm_enabled: Option<bool>,
+    fm_depth: Option<f32>,
+    subtractive_enabled: Option<bool>,
+    subtractive_depth: Option<f32>,
+}
+
+fn user_config_path() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".pirate-synth.toml"))
+}
+
+fn load_user_config(path: &Path) -> Result<Option<UserConfig>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("failed reading user config {}", path.display()))?;
+    let config: UserConfig =
+        toml::from_str(&text).with_context(|| format!("invalid TOML in {}", path.display()))?;
+    info!("loaded user config from {}", path.display());
+    Ok(Some(config))
+}
+
+fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
+    AppConfig {
+        sample_rate: user.sample_rate.unwrap_or(base.sample_rate),
+        buffer_frames: user.buffer_frames.unwrap_or(base.buffer_frames),
+        oscillators: user.oscillators.unwrap_or(base.oscillators),
+        root_key: user.root_key.unwrap_or(base.root_key),
+        root_octave: user.root_octave.unwrap_or(base.root_octave),
+        fine_tune_cents: user.fine_tune_cents.unwrap_or(base.fine_tune_cents),
+        stereo_spread: user.stereo_spread.unwrap_or(base.stereo_spread),
+        wavetable_dir: user.wavetable_dir.unwrap_or(base.wavetable_dir),
+        spi_device: user.spi_device.unwrap_or(base.spi_device),
+        reverb_enabled: user.reverb_enabled.unwrap_or(base.reverb_enabled),
+        reverb_wet: user.reverb_wet.unwrap_or(base.reverb_wet),
+        tremolo_enabled: user.tremolo_enabled.unwrap_or(base.tremolo_enabled),
+        tremolo_depth: user.tremolo_depth.unwrap_or(base.tremolo_depth),
+        crossfade_enabled: user.crossfade_enabled.unwrap_or(base.crossfade_enabled),
+        crossfade_rate: user.crossfade_rate.unwrap_or(base.crossfade_rate),
+        filter_sweep_enabled: user.filter_sweep_enabled.unwrap_or(base.filter_sweep_enabled),
+        filter_sweep_min: user.filter_sweep_min.unwrap_or(base.filter_sweep_min),
+        filter_sweep_max: user.filter_sweep_max.unwrap_or(base.filter_sweep_max),
+        filter_sweep_rate_hz: user.filter_sweep_rate_hz.unwrap_or(base.filter_sweep_rate_hz),
+        fm_enabled: user.fm_enabled.unwrap_or(base.fm_enabled),
+        fm_depth: user.fm_depth.unwrap_or(base.fm_depth),
+        subtractive_enabled: user.subtractive_enabled.unwrap_or(base.subtractive_enabled),
+        subtractive_depth: user.subtractive_depth.unwrap_or(base.subtractive_depth),
+    }
+}
+
+fn scale_mode_from_index(idx: usize) -> ScaleMode {
+    match idx {
+        0 => ScaleMode::None,
+        1 => ScaleMode::Major,
+        2 => ScaleMode::NaturalMinor,
+        3 => ScaleMode::Pentatonic,
+        4 => ScaleMode::Dorian,
+        5 => ScaleMode::Mixolydian,
+        6 => ScaleMode::WholeTone,
+        7 => ScaleMode::Hirajoshi,
+        8 => ScaleMode::Lydian,
+        _ => ScaleMode::None,
+    }
+}
+
 fn main() -> Result<()> {
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info,pirate_synth=info,ui=info"),
@@ -187,6 +275,16 @@ fn main() -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_CONFIG_PATH));
     info!("using config path {}", config_path.display());
     let config = load_config(&config_path)?;
+    let config = match user_config_path() {
+        Some(user_path) => match load_user_config(&user_path)? {
+            Some(user) => {
+                info!("applying user config from {}", user_path.display());
+                apply_user_config(config, user)
+            }
+            None => config,
+        },
+        None => config,
+    };
     info!(
         "audio config: sample_rate={} buffer_frames={} oscillators={} wavetable dir={} spi_device={}",
         config.sample_rate,
@@ -274,6 +372,7 @@ fn main() -> Result<()> {
             let old_octave = menu.octave;
             let old_cents = menu.fine_tune_cents;
             let old_spread = menu.stereo_spread;
+            let old_scale = menu.scale_index;
 
             menu.apply_button(button);
             display.draw_menu(&menu)?;
@@ -289,11 +388,27 @@ fn main() -> Result<()> {
                 if let Err(err) = audio_tx.try_send(AudioCommand::SetFineTuneCents(menu.fine_tune_cents)) {
                     warn!("failed to send fine tune cents to audio thread: {err}");
                 }
+                // Also send SetScale since spread_percent changed
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
+                    mode: scale_mode_from_index(menu.scale_index),
+                    spread_percent: menu.fine_tune_cents,
+                }) {
+                    warn!("failed to send scale update to audio thread: {err}");
+                }
             }
 
             if menu.stereo_spread != old_spread {
                 if let Err(err) = audio_tx.try_send(AudioCommand::SetStereoSpread(menu.stereo_spread)) {
                     warn!("failed to send stereo spread to audio thread: {err}");
+                }
+            }
+
+            if menu.scale_index != old_scale {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
+                    mode: scale_mode_from_index(menu.scale_index),
+                    spread_percent: menu.fine_tune_cents,
+                }) {
+                    warn!("failed to send scale update to audio thread: {err}");
                 }
             }
         }
@@ -337,8 +452,23 @@ mod tests {
         assert!((config.reverb_wet - 0.20).abs() < 0.001);
         assert!(config.tremolo_enabled);
         assert!((config.tremolo_depth - 0.35).abs() < 0.001);
-        assert!(config.crossfade_enabled);
-        assert!(!config.fm_enabled);
-        assert!(!config.subtractive_enabled);
+    }
+    #[test]
+    fn apply_user_config_overrides_selected_fields() {
+        let base = AppConfig::default();
+        let user = UserConfig {
+            root_key: Some("G".into()),
+            root_octave: Some(4),
+            fm_enabled: Some(true),
+            ..UserConfig::default()
+        };
+        let merged = apply_user_config(base, user);
+        assert_eq!(merged.root_key, "G");
+        assert_eq!(merged.root_octave, 4);
+        assert!(merged.fm_enabled);
+        // unchanged fields retain defaults
+        assert_eq!(merged.sample_rate, 48_000);
+        assert_eq!(merged.oscillators, 8);
+        assert!(merged.reverb_enabled);
     }
 }

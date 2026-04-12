@@ -1,6 +1,10 @@
 [Unit]
 Description=Pirate Synth service
-After=sound.target
+# Start as soon as the HiFiBerry DAC ALSA devices are present (udev-activated
+# via sound.target), rather than waiting for the full multi-user environment.
+# alsa-restore.service runs After=sound.target, so listing it here ensures
+# mixer settings are applied before we open the PCM device.
+After=sound.target alsa-restore.service
 
 [Service]
 Type=simple
@@ -13,4 +17,7 @@ Restart=always
 RestartSec=2
 
 [Install]
-WantedBy=multi-user.target
+# sound.target is reached when udev detects the DAC (early in boot).
+# multi-user.target kept as a fallback in case sound.target is not activated
+# explicitly on a given boot (e.g. DAC missing / overlay not applied yet).
+WantedBy=sound.target multi-user.target

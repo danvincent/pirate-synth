@@ -4,7 +4,7 @@ use std::thread;
 
 use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender};
-use engine::Engine;
+use engine::{Engine, ScaleMode};
 
 #[derive(Clone, Debug)]
 pub struct AudioConfig {
@@ -24,6 +24,7 @@ pub enum AudioCommand {
     SetFilterSweep { enabled: bool, min: f32, max: f32, rate_hz: f32 },
     SetFm { enabled: bool, depth: f32 },
     SetSubtractive { enabled: bool, depth: f32 },
+    SetScale { mode: ScaleMode, spread_percent: f32 },
     Stop,
 }
 
@@ -73,6 +74,7 @@ fn run_audio_loop(
                 AudioCommand::SetFilterSweep { enabled, min, max, rate_hz } => engine.set_filter_sweep(enabled, min, max, rate_hz),
                 AudioCommand::SetFm { enabled, depth } => engine.set_fm(enabled, depth),
                 AudioCommand::SetSubtractive { enabled, depth } => engine.set_subtractive(enabled, depth),
+                AudioCommand::SetScale { mode, spread_percent } => engine.set_scale(mode, spread_percent),
                 AudioCommand::Stop => {
                     drop(stdin);
                     let _ = child.wait();
