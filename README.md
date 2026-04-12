@@ -100,6 +100,7 @@ granular_wavs = 8
 - `granular_wavs` is adjustable in the UI menu (`GRAN WAVS`) and controls active granular source lanes:
   - `0` disables granular playback
   - values above loaded WAV file count round-robin the available files
+- If both `oscillators > 0` and `granular_wavs > 0`, wavetable and granular layers are mixed together.
 
 ## GPIO/SPI assumptions
 

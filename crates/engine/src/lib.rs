@@ -566,10 +566,7 @@ impl Engine {
     }
 
     pub fn render_i16_stereo(&mut self, out: &mut [i16]) {
-        if self.source_kind == SourceKind::Wav {
-            self.render_granular_i16_stereo(out);
-            return;
-        }
+        let mix_granular = self.source_kind == SourceKind::Wav;
 
         for frame in out.chunks_exact_mut(2) {
             // Smooth ramp for FM enable/disable
@@ -793,6 +790,14 @@ impl Engine {
             let r = (r_out * gain).clamp(-1.0, 1.0);
             frame[0] = (l * i16::MAX as f32) as i16;
             frame[1] = (r * i16::MAX as f32) as i16;
+        }
+
+        if mix_granular {
+            let mut granular_out = vec![0i16; out.len()];
+            self.render_granular_i16_stereo(&mut granular_out);
+            for (dst, add) in out.iter_mut().zip(granular_out.iter()) {
+                *dst = dst.saturating_add(*add);
+            }
         }
     }
 
@@ -1407,18 +1412,26 @@ mod tests {
     }
 
     #[test]
-    fn granular_wavs_zero_disables_output() {
+    fn granular_wavs_zero_disables_granular_layer_but_keeps_wavetable() {
         let source = GranularSource {
             name: "test".to_string(),
             sample_rate: 48_000,
             samples: vec![0.0, 0.6, -0.6, 0.3, -0.3, 0.0, 0.5, -0.5],
         };
-        let mut engine =
+        let mut granular_engine =
             Engine::new_granular(48_000, 4, vec![source], GranularConfig::default()).unwrap();
-        engine.set_granular_wavs(0);
-        let mut out = [1i16; 128];
-        engine.render_i16_stereo(&mut out);
-        assert!(out.iter().all(|sample| *sample == 0));
+        granular_engine.set_frequency(220.0);
+        granular_engine.set_granular_wavs(0);
+        let mut granular_off = [0i16; 128];
+        granular_engine.render_i16_stereo(&mut granular_off);
+
+        let mut wavetable_engine = Engine::new(48_000, 4, vec![default_sine_wavetable()]).unwrap();
+        wavetable_engine.set_frequency(220.0);
+        let mut wavetable_only = [0i16; 128];
+        wavetable_engine.render_i16_stereo(&mut wavetable_only);
+
+        assert_eq!(granular_off, wavetable_only);
+        assert!(granular_off.iter().any(|sample| *sample != 0));
     }
 
     #[test]
@@ -1444,8 +1457,7 @@ mod tests {
         config.grain_size_ms = 100.0;
         config.max_overlapping_grains = 16;
 
-        let mut engine =
-            Engine::new_granular(48_000, 4, vec![source_a, source_b], config).unwrap();
+        let mut engine = Engine::new_granular(48_000, 4, vec![source_a, source_b], config).unwrap();
         engine.set_frequency(1.0);
         engine.set_granular_wavs(5);
         let mut out = [0i16; 32];
@@ -1459,6 +1471,35 @@ mod tests {
             .map(|grain| grain.source_index)
             .collect();
         assert_eq!(indices, vec![0, 1, 0, 1, 0]);
+    }
+
+    #[test]
+    fn granular_and_wavetable_mix_when_both_counts_are_nonzero() {
+        let source = GranularSource {
+            name: "mix".to_string(),
+            sample_rate: 48_000,
+            samples: (0..24_000)
+                .map(|i| if i % 2 == 0 { 0.8 } else { -0.8 })
+                .collect(),
+        };
+        let mut config = GranularConfig::default();
+        config.grain_density_hz = 48_000.0;
+        config.grain_size_ms = 80.0;
+        config.max_overlapping_grains = 8;
+
+        let mut mixed_engine = Engine::new_granular(48_000, 4, vec![source], config).unwrap();
+        mixed_engine.set_frequency(220.0);
+        mixed_engine.set_granular_wavs(1);
+        let mut mixed_out = [0i16; 512];
+        mixed_engine.render_i16_stereo(&mut mixed_out);
+
+        let mut wavetable_engine = Engine::new(48_000, 4, vec![default_sine_wavetable()]).unwrap();
+        wavetable_engine.set_frequency(220.0);
+        let mut wavetable_out = [0i16; 512];
+        wavetable_engine.render_i16_stereo(&mut wavetable_out);
+
+        assert!(mixed_out.iter().any(|sample| *sample != 0));
+        assert_ne!(mixed_out, wavetable_out);
     }
 
     #[test]
