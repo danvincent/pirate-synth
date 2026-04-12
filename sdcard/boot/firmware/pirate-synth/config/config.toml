@@ -5,6 +5,7 @@ root_key = "C"
 root_octave = 2
 fine_tune_cents = 0
 wavetable_dir = "/var/lib/pirate-synth/wavetables"
+wav_dir = "/var/lib/pirate-synth/WAV"
 spi_device = "/dev/spidev0.1"
 
 # Audio effects (all feature-flagged, safe to set false if CPU load too high)
@@ -22,3 +23,13 @@ fm_enabled = false
 fm_depth = 0.15
 subtractive_enabled = false
 subtractive_depth = 0.30
+
+# Granular mode (auto-selected when WAV files exist in wav_dir)
+granular_grain_size_ms = 120.0
+granular_density_hz = 24.0
+granular_max_overlap = 16
+granular_position = 0.5
+granular_position_jitter = 0.15
+granular_attack_ms = 10.0
+granular_release_ms = 25.0
+granular_wavs = 8

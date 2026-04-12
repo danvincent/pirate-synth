@@ -9,6 +9,7 @@ Boot-to-synth Raspberry Pi Zero project for the Pimoroni Pirate Audio Headphone 
 - `crates/ui` - ST7789 menu renderer + Pirate Audio buttons (active-low GPIO)
 - `crates/app` - synth binary wiring config, UI, and audio
 - `assets/wavetables` - source wavetable files
+- `assets/WAV` - granular source WAV files (PCM16/float32), including a default `placeholder.wav`
 - `sdcard/boot/firmware/pirate-synth` - first-boot installer/services/config staged for SD card
 - `scripts/package.sh` - cross-build + SD card bundle packaging
 
@@ -61,6 +62,7 @@ Installer actions:
 - Installs binary to `/usr/local/bin/pirate_synth`
 - Installs config to `/etc/pirate-synth/config.toml`
 - Copies wavetables to `/var/lib/pirate-synth/wavetables`
+- Copies granular WAV sources to `/var/lib/pirate-synth/WAV`
 - Enables `pirate-synth.service`
 - Reboots
 
@@ -78,10 +80,27 @@ root_key = "C"
 root_octave = 2
 fine_tune_cents = 0
 wavetable_dir = "/var/lib/pirate-synth/wavetables"
+wav_dir = "/var/lib/pirate-synth/WAV"
+granular_grain_size_ms = 120.0
+granular_density_hz = 24.0
+granular_max_overlap = 16
+granular_position = 0.5
+granular_position_jitter = 0.15
+granular_attack_ms = 10.0
+granular_release_ms = 25.0
+granular_wavs = 8
 ```
 
 - `oscillators` controls simultaneous oscillators (allocated at startup)
 - `root_key`, `root_octave`, `fine_tune_cents` tune the drone via the UI
+- Engine selection is automatic by source-folder origin:
+  - if `wav_dir` contains `.wav` files, granular synthesis mode is used
+  - otherwise the wavetable engine uses `wavetable_dir`
+- Granular mode currently supports WAV PCM16 and float32 sources (TODO: add more WAV variants/modulation features)
+- `granular_wavs` is adjustable in the UI menu (`GRAN WAVS`) and controls active granular source lanes:
+  - `0` disables granular playback
+  - values above loaded WAV file count round-robin the available files
+- If both `oscillators > 0` and `granular_wavs > 0`, wavetable and granular layers are mixed together.
 
 ## GPIO/SPI assumptions
 
