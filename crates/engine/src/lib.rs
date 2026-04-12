@@ -240,7 +240,6 @@ pub struct Engine {
     scale_mode: ScaleMode,
     source_kind: SourceKind,
     granular: Option<GranularState>,
-    mix_buffer: Vec<i16>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -355,7 +354,6 @@ impl Engine {
             scale_mode: ScaleMode::None,
             source_kind: SourceKind::Wavetable,
             granular: None,
-            mix_buffer: Vec::new(),
         };
 
         engine.set_stereo_spread(0);
@@ -788,83 +786,72 @@ impl Engine {
             // Filter sweep is now applied per-oscillator above
 
             let gain = 0.25f32 / self.oscillators.len() as f32;
-            let l = (l_out * gain).clamp(-1.0, 1.0);
-            let r = (r_out * gain).clamp(-1.0, 1.0);
+            let mut l = l_out * gain;
+            let mut r = r_out * gain;
+            if mix_granular {
+                let (gran_l, gran_r) = self.render_granular_frame_normalized();
+                l += gran_l;
+                r += gran_r;
+            }
+            let l = l.clamp(-1.0, 1.0);
+            let r = r.clamp(-1.0, 1.0);
             frame[0] = (l * i16::MAX as f32) as i16;
             frame[1] = (r * i16::MAX as f32) as i16;
         }
-
-        if mix_granular {
-            let mut mix_buffer = std::mem::take(&mut self.mix_buffer);
-            if mix_buffer.len() != out.len() {
-                mix_buffer.resize(out.len(), 0);
-            } else {
-                mix_buffer.fill(0);
-            }
-            self.render_granular_i16_stereo(&mut mix_buffer);
-            for (dst, add) in out.iter_mut().zip(mix_buffer.iter()) {
-                *dst = dst.saturating_add(*add);
-            }
-            self.mix_buffer = mix_buffer;
-        }
     }
 
-    fn render_granular_i16_stereo(&mut self, out: &mut [i16]) {
+    fn render_granular_frame_normalized(&mut self) -> (f32, f32) {
         let sample_rate = self.sample_rate as f32;
         let base_frequency_hz = self.base_frequency_hz;
         let fine_tune_cents = self.fine_tune_cents;
         let oscillators = &mut self.oscillators;
         let Some(granular) = self.granular.as_mut() else {
-            out.fill(0);
-            return;
+            return (0.0, 0.0);
         };
         if granular.configured_wavs == 0 {
-            out.fill(0);
-            return;
+            return (0.0, 0.0);
         }
 
-        for frame in out.chunks_exact_mut(2) {
-            let spawn_interval_samples =
-                (sample_rate / granular.config.grain_density_hz.max(0.1)).max(1.0);
-            granular.samples_until_next_grain -= 1.0;
-            while granular.samples_until_next_grain <= 0.0 {
-                spawn_grain(
-                    granular,
-                    oscillators,
-                    sample_rate,
-                    base_frequency_hz,
-                    fine_tune_cents,
-                );
-                granular.samples_until_next_grain += spawn_interval_samples;
-            }
-
-            let mut left = 0.0f32;
-            let mut right = 0.0f32;
-            let mut idx = 0usize;
-            while idx < granular.active_grains.len() {
-                let grain = &mut granular.active_grains[idx];
-                let source = &granular.sources[grain.source_index];
-                let source_len = source.samples.len() as f32;
-                let pos = grain.start_sample + grain.sample_offset;
-                if grain.age_samples >= grain.sample_length || pos + 1.0 >= source_len {
-                    granular.active_grains.swap_remove(idx);
-                    continue;
-                }
-                let envelope = grain_envelope(grain);
-                let sample = sample_linear(&source.samples, pos) * envelope;
-                left += sample * grain.pan_l;
-                right += sample * grain.pan_r;
-                grain.sample_offset += grain.playback_ratio;
-                grain.age_samples += 1;
-                idx += 1;
-            }
-
-            let grain_norm = granular.config.max_overlapping_grains.max(1) as f32;
-            let l = (left / grain_norm).clamp(-1.0, 1.0);
-            let r = (right / grain_norm).clamp(-1.0, 1.0);
-            frame[0] = (l * i16::MAX as f32) as i16;
-            frame[1] = (r * i16::MAX as f32) as i16;
+        let spawn_interval_samples =
+            (sample_rate / granular.config.grain_density_hz.max(0.1)).max(1.0);
+        granular.samples_until_next_grain -= 1.0;
+        while granular.samples_until_next_grain <= 0.0 {
+            spawn_grain(
+                granular,
+                oscillators,
+                sample_rate,
+                base_frequency_hz,
+                fine_tune_cents,
+            );
+            granular.samples_until_next_grain += spawn_interval_samples;
         }
+
+        let mut left = 0.0f32;
+        let mut right = 0.0f32;
+        let mut idx = 0usize;
+        while idx < granular.active_grains.len() {
+            let grain = &mut granular.active_grains[idx];
+            let source = &granular.sources[grain.source_index];
+            let source_len = source.samples.len() as f32;
+            let pos = grain.start_sample + grain.sample_offset;
+            if grain.age_samples >= grain.sample_length || pos + 1.0 >= source_len {
+                granular.active_grains.swap_remove(idx);
+                continue;
+            }
+            let envelope = grain_envelope(grain);
+            let sample = sample_linear(&source.samples, pos) * envelope;
+            left += sample * grain.pan_l;
+            right += sample * grain.pan_r;
+            grain.sample_offset += grain.playback_ratio;
+            grain.age_samples += 1;
+            idx += 1;
+        }
+
+        let grain_norm = granular.config.max_overlapping_grains.max(1) as f32;
+        (
+            (left / grain_norm).clamp(-1.0, 1.0),
+            (right / grain_norm).clamp(-1.0, 1.0),
+        )
     }
 }
 
