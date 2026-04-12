@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use thiserror::Error;
 
+const C2_FREQUENCY_HZ: f32 = 65.406_39;
+
 #[derive(Debug, Error)]
 pub enum EngineError {
     #[error("wavetable must have at least 2 samples")]
@@ -301,7 +303,7 @@ impl Engine {
             oscillators.push(Oscillator {
                 phase: 0.0,
                 detune_ratio: 2.0f32.powf(cents / 1200.0),
-                current_base_hz: 65.406_39,
+                current_base_hz: C2_FREQUENCY_HZ,
                 pending_base_hz: None,
                 delay_cycles_remaining: 0,
                 rng_state,
@@ -321,7 +323,7 @@ impl Engine {
             wavetables,
             wavetable_offset: 0,
             oscillators,
-            base_frequency_hz: 65.406_39,
+            base_frequency_hz: C2_FREQUENCY_HZ,
             fine_tune_cents: 0.0,
             stereo_spread: 0,
             reverb_enabled: true,
@@ -895,13 +897,12 @@ fn spawn_grain(
     let start_sample = position * (source_len.saturating_sub(grain_len_samples + 1) as f32);
 
     // Base C2 is used by the wavetable drone path, so we keep pitch relationships aligned.
-    let root_ratio = (base_frequency_hz / 65.406_39).max(0.01);
+    let root_ratio = (base_frequency_hz / C2_FREQUENCY_HZ).max(0.01);
     let fine_ratio = 2.0f32.powf(fine_tune_cents / 1200.0);
     let playback_ratio = root_ratio
         * fine_ratio
         * osc.detune_ratio
         * (source.sample_rate as f32 / output_sample_rate);
-    // TODO: Add optional per-grain pitch/position modulation sources via GranularConfig.
 
     let attack =
         ((granular.config.envelope_attack_ms.max(0.0) / 1000.0) * output_sample_rate) as usize;

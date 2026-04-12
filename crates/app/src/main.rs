@@ -351,6 +351,45 @@ fn apply_engine_params(engine: &mut Engine, menu: &MenuState, config: &AppConfig
     engine.set_granular_config(granular_config(config));
 }
 
+fn initialize_engine(config: &AppConfig) -> Result<Engine> {
+    let wav_sources = if config.wav_dir.exists() {
+        load_wav_sources(&config.wav_dir).with_context(|| {
+            format!(
+                "failed loading WAV granular sources from {}",
+                config.wav_dir.display()
+            )
+        })?
+    } else {
+        Vec::new()
+    };
+    if wav_sources.is_empty() {
+        let wavetables = load_wavetables(&config.wavetable_dir, config.oscillators).with_context(|| {
+            format!(
+                "failed loading wavetables from {}",
+                config.wavetable_dir.display()
+            )
+        })?;
+        info!(
+            "loaded {} wavetable(s) from {}",
+            wavetables.len(),
+            config.wavetable_dir.display()
+        );
+        Engine::new(config.sample_rate, config.oscillators, wavetables)
+    } else {
+        info!(
+            "loaded {} WAV source file(s) from {} (granular mode)",
+            wav_sources.len(),
+            config.wav_dir.display()
+        );
+        Engine::new_granular(
+            config.sample_rate,
+            config.oscillators,
+            wav_sources,
+            granular_config(config),
+        )
+    }
+}
+
 fn scale_mode_from_index(idx: usize) -> ScaleMode {
     match idx {
         0 => ScaleMode::None,
@@ -423,43 +462,7 @@ fn main() -> Result<()> {
     }
 
     info!("initializing synth engine");
-    let wav_sources = if config.wav_dir.exists() {
-        load_wav_sources(&config.wav_dir).with_context(|| {
-            format!(
-                "failed loading WAV granular sources from {}",
-                config.wav_dir.display()
-            )
-        })?
-    } else {
-        Vec::new()
-    };
-    let mut engine = if wav_sources.is_empty() {
-        let wavetables =
-            load_wavetables(&config.wavetable_dir, config.oscillators).with_context(|| {
-                format!(
-                    "failed loading wavetables from {}",
-                    config.wavetable_dir.display()
-                )
-            })?;
-        info!(
-            "loaded {} wavetable(s) from {}",
-            wavetables.len(),
-            config.wavetable_dir.display()
-        );
-        Engine::new(config.sample_rate, config.oscillators, wavetables)?
-    } else {
-        info!(
-            "loaded {} WAV source file(s) from {} (granular mode)",
-            wav_sources.len(),
-            config.wav_dir.display()
-        );
-        Engine::new_granular(
-            config.sample_rate,
-            config.oscillators,
-            wav_sources,
-            granular_config(&config),
-        )?
-    };
+    let mut engine = initialize_engine(&config)?;
     info!("selected synthesis source: {:?}", engine.source_kind());
     let initial_hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
     engine.set_frequency(initial_hz);
