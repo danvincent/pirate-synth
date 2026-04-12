@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use audio_alsa::{command_channel, spawn_audio_thread, AudioCommand, AudioConfig};
-use engine::{key_to_frequency_hz, load_wavetables, Engine, ScaleMode};
+use engine::{
+    key_to_frequency_hz, load_wav_sources, load_wavetables, Engine, GranularConfig, ScaleMode,
+};
 use log::{debug, info, warn};
 use serde::Deserialize;
 use ui::{ButtonReader, MenuState, St7789Display};
@@ -29,6 +31,8 @@ struct AppConfig {
     stereo_spread: u8,
     #[serde(default = "default_wavetable_dir")]
     wavetable_dir: PathBuf,
+    #[serde(default = "default_wav_dir")]
+    wav_dir: PathBuf,
     #[serde(default = "default_spi_device")]
     spi_device: String,
     // Reverb
@@ -65,6 +69,21 @@ struct AppConfig {
     subtractive_enabled: bool,
     #[serde(default = "default_subtractive_depth")]
     subtractive_depth: f32,
+    // Granular
+    #[serde(default = "default_granular_grain_size_ms")]
+    granular_grain_size_ms: f32,
+    #[serde(default = "default_granular_density_hz")]
+    granular_density_hz: f32,
+    #[serde(default = "default_granular_max_overlap")]
+    granular_max_overlap: usize,
+    #[serde(default = "default_granular_position")]
+    granular_position: f32,
+    #[serde(default = "default_granular_position_jitter")]
+    granular_position_jitter: f32,
+    #[serde(default = "default_granular_attack_ms")]
+    granular_attack_ms: f32,
+    #[serde(default = "default_granular_release_ms")]
+    granular_release_ms: f32,
 }
 
 fn default_sample_rate() -> u32 {
@@ -84,6 +103,9 @@ fn default_root_octave() -> i32 {
 }
 fn default_wavetable_dir() -> PathBuf {
     PathBuf::from("/var/lib/pirate-synth/wavetables")
+}
+fn default_wav_dir() -> PathBuf {
+    PathBuf::from("/var/lib/pirate-synth/WAV")
 }
 fn default_spi_device() -> String {
     "/dev/spidev0.1".into()
@@ -125,6 +147,27 @@ fn default_fm_depth() -> f32 {
 fn default_subtractive_depth() -> f32 {
     0.30
 }
+fn default_granular_grain_size_ms() -> f32 {
+    120.0
+}
+fn default_granular_density_hz() -> f32 {
+    24.0
+}
+fn default_granular_max_overlap() -> usize {
+    16
+}
+fn default_granular_position() -> f32 {
+    0.5
+}
+fn default_granular_position_jitter() -> f32 {
+    0.15
+}
+fn default_granular_attack_ms() -> f32 {
+    10.0
+}
+fn default_granular_release_ms() -> f32 {
+    25.0
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -137,6 +180,7 @@ impl Default for AppConfig {
             fine_tune_cents: 0.0,
             stereo_spread: 0,
             wavetable_dir: default_wavetable_dir(),
+            wav_dir: default_wav_dir(),
             spi_device: default_spi_device(),
             reverb_enabled: default_reverb_enabled(),
             reverb_wet: default_reverb_wet(),
@@ -152,6 +196,13 @@ impl Default for AppConfig {
             fm_depth: default_fm_depth(),
             subtractive_enabled: false,
             subtractive_depth: default_subtractive_depth(),
+            granular_grain_size_ms: default_granular_grain_size_ms(),
+            granular_density_hz: default_granular_density_hz(),
+            granular_max_overlap: default_granular_max_overlap(),
+            granular_position: default_granular_position(),
+            granular_position_jitter: default_granular_position_jitter(),
+            granular_attack_ms: default_granular_attack_ms(),
+            granular_release_ms: default_granular_release_ms(),
         }
     }
 }
@@ -184,6 +235,7 @@ struct UserConfig {
     fine_tune_cents: Option<f32>,
     stereo_spread: Option<u8>,
     wavetable_dir: Option<PathBuf>,
+    wav_dir: Option<PathBuf>,
     spi_device: Option<String>,
     reverb_enabled: Option<bool>,
     reverb_wet: Option<f32>,
@@ -199,6 +251,13 @@ struct UserConfig {
     fm_depth: Option<f32>,
     subtractive_enabled: Option<bool>,
     subtractive_depth: Option<f32>,
+    granular_grain_size_ms: Option<f32>,
+    granular_density_hz: Option<f32>,
+    granular_max_overlap: Option<usize>,
+    granular_position: Option<f32>,
+    granular_position_jitter: Option<f32>,
+    granular_attack_ms: Option<f32>,
+    granular_release_ms: Option<f32>,
 }
 
 fn user_config_path() -> Option<PathBuf> {
@@ -227,6 +286,7 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         fine_tune_cents: user.fine_tune_cents.unwrap_or(base.fine_tune_cents),
         stereo_spread: user.stereo_spread.unwrap_or(base.stereo_spread),
         wavetable_dir: user.wavetable_dir.unwrap_or(base.wavetable_dir),
+        wav_dir: user.wav_dir.unwrap_or(base.wav_dir),
         spi_device: user.spi_device.unwrap_or(base.spi_device),
         reverb_enabled: user.reverb_enabled.unwrap_or(base.reverb_enabled),
         reverb_wet: user.reverb_wet.unwrap_or(base.reverb_wet),
@@ -234,15 +294,61 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         tremolo_depth: user.tremolo_depth.unwrap_or(base.tremolo_depth),
         crossfade_enabled: user.crossfade_enabled.unwrap_or(base.crossfade_enabled),
         crossfade_rate: user.crossfade_rate.unwrap_or(base.crossfade_rate),
-        filter_sweep_enabled: user.filter_sweep_enabled.unwrap_or(base.filter_sweep_enabled),
+        filter_sweep_enabled: user
+            .filter_sweep_enabled
+            .unwrap_or(base.filter_sweep_enabled),
         filter_sweep_min: user.filter_sweep_min.unwrap_or(base.filter_sweep_min),
         filter_sweep_max: user.filter_sweep_max.unwrap_or(base.filter_sweep_max),
-        filter_sweep_rate_hz: user.filter_sweep_rate_hz.unwrap_or(base.filter_sweep_rate_hz),
+        filter_sweep_rate_hz: user
+            .filter_sweep_rate_hz
+            .unwrap_or(base.filter_sweep_rate_hz),
         fm_enabled: user.fm_enabled.unwrap_or(base.fm_enabled),
         fm_depth: user.fm_depth.unwrap_or(base.fm_depth),
         subtractive_enabled: user.subtractive_enabled.unwrap_or(base.subtractive_enabled),
         subtractive_depth: user.subtractive_depth.unwrap_or(base.subtractive_depth),
+        granular_grain_size_ms: user
+            .granular_grain_size_ms
+            .unwrap_or(base.granular_grain_size_ms),
+        granular_density_hz: user.granular_density_hz.unwrap_or(base.granular_density_hz),
+        granular_max_overlap: user
+            .granular_max_overlap
+            .unwrap_or(base.granular_max_overlap),
+        granular_position: user.granular_position.unwrap_or(base.granular_position),
+        granular_position_jitter: user
+            .granular_position_jitter
+            .unwrap_or(base.granular_position_jitter),
+        granular_attack_ms: user.granular_attack_ms.unwrap_or(base.granular_attack_ms),
+        granular_release_ms: user.granular_release_ms.unwrap_or(base.granular_release_ms),
     }
+}
+
+fn granular_config(config: &AppConfig) -> GranularConfig {
+    GranularConfig {
+        grain_size_ms: config.granular_grain_size_ms,
+        grain_density_hz: config.granular_density_hz,
+        max_overlapping_grains: config.granular_max_overlap.max(1),
+        position: config.granular_position.clamp(0.0, 1.0),
+        position_jitter: config.granular_position_jitter.clamp(0.0, 1.0),
+        envelope_attack_ms: config.granular_attack_ms.max(0.0),
+        envelope_release_ms: config.granular_release_ms.max(0.0),
+    }
+}
+
+fn apply_engine_params(engine: &mut Engine, menu: &MenuState, config: &AppConfig) {
+    engine.set_fine_tune_cents(menu.fine_tune_cents);
+    engine.set_stereo_spread(menu.stereo_spread);
+    engine.set_reverb(config.reverb_enabled, config.reverb_wet);
+    engine.set_tremolo(config.tremolo_enabled, config.tremolo_depth);
+    engine.set_crossfade(config.crossfade_enabled, config.crossfade_rate);
+    engine.set_filter_sweep(
+        config.filter_sweep_enabled,
+        config.filter_sweep_min,
+        config.filter_sweep_max,
+        config.filter_sweep_rate_hz,
+    );
+    engine.set_fm(config.fm_enabled, config.fm_depth);
+    engine.set_subtractive(config.subtractive_enabled, config.subtractive_depth);
+    engine.set_granular_config(granular_config(config));
 }
 
 fn scale_mode_from_index(idx: usize) -> ScaleMode {
@@ -286,24 +392,13 @@ fn main() -> Result<()> {
         None => config,
     };
     info!(
-        "audio config: sample_rate={} buffer_frames={} oscillators={} wavetable dir={} spi_device={}",
+        "audio config: sample_rate={} buffer_frames={} oscillators={} wavetable dir={} wav dir={} spi_device={}",
         config.sample_rate,
         config.buffer_frames,
         config.oscillators,
         config.wavetable_dir.display(),
+        config.wav_dir.display(),
         config.spi_device
-    );
-
-    let wavetables = load_wavetables(&config.wavetable_dir, config.oscillators).with_context(|| {
-        format!(
-            "failed loading wavetables from {}",
-            config.wavetable_dir.display()
-        )
-    })?;
-    info!(
-        "loaded {} wavetable(s) from {}",
-        wavetables.len(),
-        config.wavetable_dir.display()
     );
 
     let mut menu = MenuState::new(config.root_octave, config.fine_tune_cents);
@@ -328,17 +423,47 @@ fn main() -> Result<()> {
     }
 
     info!("initializing synth engine");
-    let mut engine = Engine::new(config.sample_rate, config.oscillators, wavetables.clone())?;
+    let wav_sources = if config.wav_dir.exists() {
+        load_wav_sources(&config.wav_dir).with_context(|| {
+            format!(
+                "failed loading WAV granular sources from {}",
+                config.wav_dir.display()
+            )
+        })?
+    } else {
+        Vec::new()
+    };
+    let mut engine = if wav_sources.is_empty() {
+        let wavetables =
+            load_wavetables(&config.wavetable_dir, config.oscillators).with_context(|| {
+                format!(
+                    "failed loading wavetables from {}",
+                    config.wavetable_dir.display()
+                )
+            })?;
+        info!(
+            "loaded {} wavetable(s) from {}",
+            wavetables.len(),
+            config.wavetable_dir.display()
+        );
+        Engine::new(config.sample_rate, config.oscillators, wavetables)?
+    } else {
+        info!(
+            "loaded {} WAV source file(s) from {} (granular mode)",
+            wav_sources.len(),
+            config.wav_dir.display()
+        );
+        Engine::new_granular(
+            config.sample_rate,
+            config.oscillators,
+            wav_sources,
+            granular_config(&config),
+        )?
+    };
+    info!("selected synthesis source: {:?}", engine.source_kind());
     let initial_hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
     engine.set_frequency(initial_hz);
-    engine.set_fine_tune_cents(menu.fine_tune_cents);
-    engine.set_stereo_spread(menu.stereo_spread);
-    engine.set_reverb(config.reverb_enabled, config.reverb_wet);
-    engine.set_tremolo(config.tremolo_enabled, config.tremolo_depth);
-    engine.set_crossfade(config.crossfade_enabled, config.crossfade_rate);
-    engine.set_filter_sweep(config.filter_sweep_enabled, config.filter_sweep_min, config.filter_sweep_max, config.filter_sweep_rate_hz);
-    engine.set_fm(config.fm_enabled, config.fm_depth);
-    engine.set_subtractive(config.subtractive_enabled, config.subtractive_depth);
+    apply_engine_params(&mut engine, &menu, &config);
     info!("initial frequency set to {:.2} Hz", initial_hz);
 
     let (audio_tx, audio_rx) = command_channel();
@@ -385,7 +510,9 @@ fn main() -> Result<()> {
             }
 
             if menu.fine_tune_cents != old_cents {
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetFineTuneCents(menu.fine_tune_cents)) {
+                if let Err(err) =
+                    audio_tx.try_send(AudioCommand::SetFineTuneCents(menu.fine_tune_cents))
+                {
                     warn!("failed to send fine tune cents to audio thread: {err}");
                 }
                 // Also send SetScale since spread_percent changed
@@ -398,7 +525,9 @@ fn main() -> Result<()> {
             }
 
             if menu.stereo_spread != old_spread {
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetStereoSpread(menu.stereo_spread)) {
+                if let Err(err) =
+                    audio_tx.try_send(AudioCommand::SetStereoSpread(menu.stereo_spread))
+                {
                     warn!("failed to send stereo spread to audio thread: {err}");
                 }
             }
@@ -442,6 +571,8 @@ mod tests {
         assert_eq!(config.sample_rate, 48_000);
         assert_eq!(config.oscillators, 8);
         assert_eq!(config.root_key, "C");
+        assert_eq!(config.wav_dir, PathBuf::from("/var/lib/pirate-synth/WAV"));
+        assert_eq!(config.granular_max_overlap, 16);
     }
 
     #[test]

@@ -32,6 +32,8 @@ install -m 0755 "$BOOT_DIR/bin/pirate_synth" /usr/local/bin/pirate_synth
 install -m 0644 "$BOOT_DIR/config/config.toml" /etc/pirate-synth/config.toml
 rm -rf /var/lib/pirate-synth/wavetables
 cp -a "$BOOT_DIR/wavetables" /var/lib/pirate-synth/wavetables
+rm -rf /var/lib/pirate-synth/WAV
+cp -a "$BOOT_DIR/WAV" /var/lib/pirate-synth/WAV
 
 install -m 0644 "$BOOT_DIR/pirate-synth.service" "$SYSTEMD_DIR/pirate-synth.service"
 systemctl daemon-reload
