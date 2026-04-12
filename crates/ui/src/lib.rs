@@ -438,10 +438,10 @@ mod tests {
     }
 
     #[test]
-    fn menu_has_four_items_only() {
+    fn menu_has_five_items() {
         let menu = MenuState::new(2, 0.0);
-        assert_eq!(menu.total_items(), 4);
-        assert_eq!(menu.lines().len(), 4);
+        assert_eq!(menu.total_items(), 5);
+        assert_eq!(menu.lines().len(), 5);
     }
 
     #[test]
