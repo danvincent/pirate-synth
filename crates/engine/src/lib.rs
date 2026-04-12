@@ -82,16 +82,21 @@ struct GranularState {
     samples_until_next_grain: f32,
     active_grains: Vec<ActiveGrain>,
     source_offset: usize,
+    configured_wavs: usize,
+    round_robin_counter: usize,
 }
 
 impl GranularState {
     fn new(sources: Vec<GranularSource>, config: GranularConfig) -> Self {
+        let configured_wavs = sources.len();
         Self {
             sources,
             config,
             samples_until_next_grain: 0.0,
             active_grains: Vec::new(),
             source_offset: 0,
+            configured_wavs,
+            round_robin_counter: 0,
         }
     }
 }
@@ -444,6 +449,15 @@ impl Engine {
         }
     }
 
+    pub fn set_granular_wavs(&mut self, granular_wavs: usize) {
+        if let Some(granular) = self.granular.as_mut() {
+            granular.configured_wavs = granular_wavs;
+            if granular_wavs == 0 {
+                granular.active_grains.clear();
+            }
+        }
+    }
+
     pub fn set_reverb(&mut self, enabled: bool, wet: f32) {
         self.reverb_enabled = enabled;
         self.reverb_wet = wet.clamp(0.0, 1.0);
@@ -791,6 +805,10 @@ impl Engine {
             out.fill(0);
             return;
         };
+        if granular.configured_wavs == 0 {
+            out.fill(0);
+            return;
+        }
 
         for frame in out.chunks_exact_mut(2) {
             let spawn_interval_samples =
@@ -874,11 +892,16 @@ fn spawn_grain(
     if granular.sources.is_empty() || oscillators.is_empty() {
         return;
     }
+    if granular.configured_wavs == 0 {
+        return;
+    }
     if granular.active_grains.len() >= granular.config.max_overlapping_grains.max(1) {
         return;
     }
 
-    let source_index = granular.source_offset % granular.sources.len();
+    let lane = granular.round_robin_counter % granular.configured_wavs;
+    granular.round_robin_counter = granular.round_robin_counter.wrapping_add(1);
+    let source_index = (granular.source_offset + lane) % granular.sources.len();
     let source = &granular.sources[source_index];
     let source_len = source.samples.len();
     if source_len < 2 {
@@ -1381,6 +1404,61 @@ mod tests {
         engine.render_i16_stereo(&mut out);
         assert!(out.iter().any(|sample| *sample != 0));
         assert_eq!(engine.source_kind(), SourceKind::Wav);
+    }
+
+    #[test]
+    fn granular_wavs_zero_disables_output() {
+        let source = GranularSource {
+            name: "test".to_string(),
+            sample_rate: 48_000,
+            samples: vec![0.0, 0.6, -0.6, 0.3, -0.3, 0.0, 0.5, -0.5],
+        };
+        let mut engine =
+            Engine::new_granular(48_000, 4, vec![source], GranularConfig::default()).unwrap();
+        engine.set_granular_wavs(0);
+        let mut out = [1i16; 128];
+        engine.render_i16_stereo(&mut out);
+        assert!(out.iter().all(|sample| *sample == 0));
+    }
+
+    #[test]
+    fn granular_wavs_round_robins_sources_when_count_exceeds_files() {
+        let long_a: Vec<f32> = (0..20_000)
+            .map(|i| if i % 2 == 0 { 0.5 } else { -0.5 })
+            .collect();
+        let long_b: Vec<f32> = (0..20_000)
+            .map(|i| if i % 2 == 0 { -0.5 } else { 0.5 })
+            .collect();
+        let source_a = GranularSource {
+            name: "a".to_string(),
+            sample_rate: 48_000,
+            samples: long_a,
+        };
+        let source_b = GranularSource {
+            name: "b".to_string(),
+            sample_rate: 48_000,
+            samples: long_b,
+        };
+        let mut config = GranularConfig::default();
+        config.grain_density_hz = 48_000.0;
+        config.grain_size_ms = 100.0;
+        config.max_overlapping_grains = 16;
+
+        let mut engine =
+            Engine::new_granular(48_000, 4, vec![source_a, source_b], config).unwrap();
+        engine.set_frequency(1.0);
+        engine.set_granular_wavs(5);
+        let mut out = [0i16; 32];
+        engine.render_i16_stereo(&mut out);
+
+        let granular = engine.granular.as_ref().unwrap();
+        let indices: Vec<usize> = granular
+            .active_grains
+            .iter()
+            .take(5)
+            .map(|grain| grain.source_index)
+            .collect();
+        assert_eq!(indices, vec![0, 1, 0, 1, 0]);
     }
 
     #[test]

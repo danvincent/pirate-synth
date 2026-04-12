@@ -15,7 +15,15 @@ pub const KEY_NAMES: [&str; 12] = [
 ];
 
 pub const SCALE_NAMES: [&str; 9] = [
-    "N/A", "MAJOR", "MINOR", "PENTA", "DORIAN", "MIXO", "WHOLE", "HIRAJOSHI", "LYDIAN",
+    "N/A",
+    "MAJOR",
+    "MINOR",
+    "PENTA",
+    "DORIAN",
+    "MIXO",
+    "WHOLE",
+    "HIRAJOSHI",
+    "LYDIAN",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,18 +41,20 @@ pub struct MenuState {
     pub fine_tune_cents: f32,
     pub stereo_spread: u8,
     pub scale_index: usize,
+    pub granular_wavs: usize,
     pub selected_item: usize,
     pub scroll_offset: usize,
 }
 
 impl MenuState {
-    pub fn new(octave: i32, fine_tune_cents: f32) -> Self {
+    pub fn new(octave: i32, fine_tune_cents: f32, granular_wavs: usize) -> Self {
         Self {
             key_index: 0,
             octave,
             fine_tune_cents,
             stereo_spread: 0,
             scale_index: 0,
+            granular_wavs,
             selected_item: 0,
             scroll_offset: 0,
         }
@@ -55,12 +65,12 @@ impl MenuState {
     }
 
     pub fn total_items(&self) -> usize {
-        5
+        6
     }
 
     pub fn apply_button(&mut self, button: Button) {
         const VISIBLE_ROWS: usize = 11;
-        
+
         match button {
             Button::Up => {
                 if self.selected_item == 0 {
@@ -75,7 +85,7 @@ impl MenuState {
             Button::Select => self.increment_selected_value(),
             Button::Back => self.decrement_selected_value(),
         }
-        
+
         // Adjust scroll offset to keep selected_item visible
         if self.selected_item < self.scroll_offset {
             self.scroll_offset = self.selected_item;
@@ -91,6 +101,7 @@ impl MenuState {
             2 => self.fine_tune_cents = (self.fine_tune_cents + 1.0).min(100.0),
             3 => self.stereo_spread = (self.stereo_spread + 5).min(100),
             4 => self.scale_index = (self.scale_index + 1) % SCALE_NAMES.len(),
+            5 => self.granular_wavs = (self.granular_wavs + 1).min(64),
             _ => {}
         }
     }
@@ -114,6 +125,7 @@ impl MenuState {
                     self.scale_index -= 1;
                 }
             }
+            5 => self.granular_wavs = self.granular_wavs.saturating_sub(1),
             _ => {}
         }
     }
@@ -125,6 +137,7 @@ impl MenuState {
             format!("CENTS: {:+}", self.fine_tune_cents as i32),
             format!("SPREAD: {}", self.stereo_spread),
             format!("SCALE: {}", SCALE_NAMES[self.scale_index]),
+            format!("GRAN WAVS: {}", self.granular_wavs),
         ]
     }
 }
@@ -209,15 +222,15 @@ impl St7789Display {
     }
 
     fn init(&mut self) -> Result<()> {
-        self.command(0x01, &[])?;  // SWRESET
+        self.command(0x01, &[])?; // SWRESET
         std::thread::sleep(std::time::Duration::from_millis(150));
-        self.command(0x11, &[])?;  // SLPOUT
+        self.command(0x11, &[])?; // SLPOUT
         std::thread::sleep(std::time::Duration::from_millis(10));
-        self.command(0x3A, &[0x55])?;  // COLMOD RGB565
-        self.command(0x36, &[0x00])?;  // MADCTL default orientation
-        self.command(0x21, &[])?;      // INVON
-        self.command(0x13, &[])?;      // NORON
-        self.command(0x29, &[])?;      // DISPON
+        self.command(0x3A, &[0x55])?; // COLMOD RGB565
+        self.command(0x36, &[0x00])?; // MADCTL default orientation
+        self.command(0x21, &[])?; // INVON
+        self.command(0x13, &[])?; // NORON
+        self.command(0x29, &[])?; // DISPON
         std::thread::sleep(std::time::Duration::from_millis(10));
         if let Some(backlight) = &mut self.backlight {
             backlight.set_high();
@@ -243,7 +256,7 @@ impl St7789Display {
 
     pub fn draw_menu(&mut self, state: &MenuState) -> Result<()> {
         const VISIBLE_ROWS: usize = 11;
-        
+
         let mut fb = Framebuffer::new(240, 240);
         fb.clear(0x0000);
         fb.draw_text(8, 8, "PIRATE SYNTH", 0xFFFF, 0x0000);
@@ -280,7 +293,7 @@ impl St7789Display {
 
     pub fn draw_menu_to_ppm(state: &MenuState, path: &Path) -> Result<()> {
         const VISIBLE_ROWS: usize = 11;
-        
+
         let mut fb = Framebuffer::new(240, 240);
         fb.clear(0x0000);
         fb.draw_text(8, 8, "PIRATE SYNTH", 0xFFFF, 0x0000);
@@ -432,27 +445,27 @@ mod tests {
 
     #[test]
     fn menu_navigation_wraps() {
-        let mut menu = MenuState::new(2, 0.0);
+        let mut menu = MenuState::new(2, 0.0, 8);
         menu.apply_button(Button::Up);
         assert_eq!(menu.selected_item, menu.total_items() - 1);
     }
 
     #[test]
-    fn menu_has_five_items() {
-        let menu = MenuState::new(2, 0.0);
-        assert_eq!(menu.total_items(), 5);
-        assert_eq!(menu.lines().len(), 5);
+    fn menu_has_six_items() {
+        let menu = MenuState::new(2, 0.0, 8);
+        assert_eq!(menu.total_items(), 6);
+        assert_eq!(menu.lines().len(), 6);
     }
 
     #[test]
     fn menu_scroll_offset_initialized_to_zero() {
-        let menu = MenuState::new(2, 0.0);
+        let menu = MenuState::new(2, 0.0, 8);
         assert_eq!(menu.scroll_offset, 0);
     }
 
     #[test]
     fn menu_scroll_stays_zero_with_four_items() {
-        let mut menu = MenuState::new(2, 0.0);
+        let mut menu = MenuState::new(2, 0.0, 8);
         for _ in 0..20 {
             menu.apply_button(Button::Down);
         }
@@ -461,7 +474,7 @@ mod tests {
 
     #[test]
     fn menu_lines_contains_key_oct_cents_spread() {
-        let mut menu = MenuState::new(2, 0.0);
+        let mut menu = MenuState::new(2, 0.0, 9);
         menu.key_index = 0;
         menu.octave = 3;
         menu.fine_tune_cents = 5.5;
@@ -471,6 +484,15 @@ mod tests {
         assert_eq!(lines[1], "OCT: 3");
         assert_eq!(lines[2], "CENTS: +5");
         assert_eq!(lines[3], "SPREAD: 25");
+        assert_eq!(lines[5], "GRAN WAVS: 9");
+    }
+
+    #[test]
+    fn granular_wavs_menu_item_allows_zero() {
+        let mut menu = MenuState::new(2, 0.0, 1);
+        menu.selected_item = 5;
+        menu.apply_button(Button::Back);
+        assert_eq!(menu.granular_wavs, 0);
     }
 
     #[test]

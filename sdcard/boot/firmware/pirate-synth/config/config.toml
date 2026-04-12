@@ -32,3 +32,4 @@ granular_position = 0.5
 granular_position_jitter = 0.15
 granular_attack_ms = 10.0
 granular_release_ms = 25.0
+granular_wavs = 8

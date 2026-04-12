@@ -84,6 +84,8 @@ struct AppConfig {
     granular_attack_ms: f32,
     #[serde(default = "default_granular_release_ms")]
     granular_release_ms: f32,
+    #[serde(default = "default_granular_wavs")]
+    granular_wavs: usize,
 }
 
 fn default_sample_rate() -> u32 {
@@ -168,6 +170,9 @@ fn default_granular_attack_ms() -> f32 {
 fn default_granular_release_ms() -> f32 {
     25.0
 }
+fn default_granular_wavs() -> usize {
+    default_oscillators()
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -203,6 +208,7 @@ impl Default for AppConfig {
             granular_position_jitter: default_granular_position_jitter(),
             granular_attack_ms: default_granular_attack_ms(),
             granular_release_ms: default_granular_release_ms(),
+            granular_wavs: default_granular_wavs(),
         }
     }
 }
@@ -258,6 +264,7 @@ struct UserConfig {
     granular_position_jitter: Option<f32>,
     granular_attack_ms: Option<f32>,
     granular_release_ms: Option<f32>,
+    granular_wavs: Option<usize>,
 }
 
 fn user_config_path() -> Option<PathBuf> {
@@ -319,6 +326,7 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
             .unwrap_or(base.granular_position_jitter),
         granular_attack_ms: user.granular_attack_ms.unwrap_or(base.granular_attack_ms),
         granular_release_ms: user.granular_release_ms.unwrap_or(base.granular_release_ms),
+        granular_wavs: user.granular_wavs.unwrap_or(base.granular_wavs),
     }
 }
 
@@ -349,6 +357,7 @@ fn apply_engine_params(engine: &mut Engine, menu: &MenuState, config: &AppConfig
     engine.set_fm(config.fm_enabled, config.fm_depth);
     engine.set_subtractive(config.subtractive_enabled, config.subtractive_depth);
     engine.set_granular_config(granular_config(config));
+    engine.set_granular_wavs(menu.granular_wavs);
 }
 
 fn initialize_engine(config: &AppConfig) -> Result<Engine> {
@@ -363,12 +372,13 @@ fn initialize_engine(config: &AppConfig) -> Result<Engine> {
         Vec::new()
     };
     if wav_sources.is_empty() {
-        let wavetables = load_wavetables(&config.wavetable_dir, config.oscillators).with_context(|| {
-            format!(
-                "failed loading wavetables from {}",
-                config.wavetable_dir.display()
-            )
-        })?;
+        let wavetables =
+            load_wavetables(&config.wavetable_dir, config.oscillators).with_context(|| {
+                format!(
+                    "failed loading wavetables from {}",
+                    config.wavetable_dir.display()
+                )
+            })?;
         info!(
             "loaded {} wavetable(s) from {}",
             wavetables.len(),
@@ -440,7 +450,11 @@ fn main() -> Result<()> {
         config.spi_device
     );
 
-    let mut menu = MenuState::new(config.root_octave, config.fine_tune_cents);
+    let mut menu = MenuState::new(
+        config.root_octave,
+        config.fine_tune_cents,
+        config.granular_wavs,
+    );
     menu.key_index = ui::KEY_NAMES
         .iter()
         .position(|k| *k == config.root_key)
@@ -501,6 +515,7 @@ fn main() -> Result<()> {
             let old_cents = menu.fine_tune_cents;
             let old_spread = menu.stereo_spread;
             let old_scale = menu.scale_index;
+            let old_granular_wavs = menu.granular_wavs;
 
             menu.apply_button(button);
             display.draw_menu(&menu)?;
@@ -543,6 +558,14 @@ fn main() -> Result<()> {
                     warn!("failed to send scale update to audio thread: {err}");
                 }
             }
+
+            if menu.granular_wavs != old_granular_wavs {
+                if let Err(err) =
+                    audio_tx.try_send(AudioCommand::SetGranularWavs(menu.granular_wavs))
+                {
+                    warn!("failed to send granular wav count to audio thread: {err}");
+                }
+            }
         }
 
         std::thread::sleep(Duration::from_millis(25));
@@ -576,6 +599,7 @@ mod tests {
         assert_eq!(config.root_key, "C");
         assert_eq!(config.wav_dir, PathBuf::from("/var/lib/pirate-synth/WAV"));
         assert_eq!(config.granular_max_overlap, 16);
+        assert_eq!(config.granular_wavs, 8);
     }
 
     #[test]

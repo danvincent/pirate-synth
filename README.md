@@ -88,6 +88,7 @@ granular_position = 0.5
 granular_position_jitter = 0.15
 granular_attack_ms = 10.0
 granular_release_ms = 25.0
+granular_wavs = 8
 ```
 
 - `oscillators` controls simultaneous oscillators (allocated at startup)
@@ -96,6 +97,9 @@ granular_release_ms = 25.0
   - if `wav_dir` contains `.wav` files, granular synthesis mode is used
   - otherwise the wavetable engine uses `wavetable_dir`
 - Granular mode currently supports WAV PCM16 and float32 sources (TODO: add more WAV variants/modulation features)
+- `granular_wavs` is adjustable in the UI menu (`GRAN WAVS`) and controls active granular source lanes:
+  - `0` disables granular playback
+  - values above loaded WAV file count round-robin the available files
 
 ## GPIO/SPI assumptions
 
