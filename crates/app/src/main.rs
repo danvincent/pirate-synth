@@ -65,6 +65,12 @@ struct AppConfig {
     subtractive_enabled: bool,
     #[serde(default = "default_subtractive_depth")]
     subtractive_depth: f32,
+    // Scale
+    #[serde(default)]
+    scale_index: usize,
+    // Oscillators
+    #[serde(default = "default_oscillators_active")]
+    oscillators_active: bool,
 }
 
 fn default_sample_rate() -> u32 {
@@ -125,6 +131,9 @@ fn default_fm_depth() -> f32 {
 fn default_subtractive_depth() -> f32 {
     0.30
 }
+fn default_oscillators_active() -> bool {
+    true
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -152,6 +161,8 @@ impl Default for AppConfig {
             fm_depth: default_fm_depth(),
             subtractive_enabled: false,
             subtractive_depth: default_subtractive_depth(),
+            scale_index: 0,
+            oscillators_active: true,
         }
     }
 }
@@ -199,6 +210,8 @@ struct UserConfig {
     fm_depth: Option<f32>,
     subtractive_enabled: Option<bool>,
     subtractive_depth: Option<f32>,
+    scale_index: Option<usize>,
+    oscillators_active: Option<bool>,
 }
 
 fn user_config_path() -> Option<PathBuf> {
@@ -242,6 +255,8 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         fm_depth: user.fm_depth.unwrap_or(base.fm_depth),
         subtractive_enabled: user.subtractive_enabled.unwrap_or(base.subtractive_enabled),
         subtractive_depth: user.subtractive_depth.unwrap_or(base.subtractive_depth),
+        scale_index: user.scale_index.unwrap_or(base.scale_index),
+        oscillators_active: user.oscillators_active.unwrap_or(base.oscillators_active),
     }
 }
 
@@ -312,6 +327,8 @@ fn main() -> Result<()> {
         .position(|k| *k == config.root_key)
         .unwrap_or(0);
     menu.stereo_spread = config.stereo_spread;
+    menu.scale_index = config.scale_index.min(ui::SCALE_NAMES.len() - 1);
+    menu.oscillators_active = config.oscillators_active;
     if menu.key_name() != config.root_key {
         warn!(
             "unknown root_key '{}' in config, falling back to '{}'",
@@ -339,6 +356,10 @@ fn main() -> Result<()> {
     engine.set_filter_sweep(config.filter_sweep_enabled, config.filter_sweep_min, config.filter_sweep_max, config.filter_sweep_rate_hz);
     engine.set_fm(config.fm_enabled, config.fm_depth);
     engine.set_subtractive(config.subtractive_enabled, config.subtractive_depth);
+    engine.set_scale(scale_mode_from_index(config.scale_index), config.fine_tune_cents);
+    if !config.oscillators_active {
+        engine.set_oscillators_active(false);
+    }
     info!("initial frequency set to {:.2} Hz", initial_hz);
 
     let (audio_tx, audio_rx) = command_channel();
@@ -373,6 +394,7 @@ fn main() -> Result<()> {
             let old_cents = menu.fine_tune_cents;
             let old_spread = menu.stereo_spread;
             let old_scale = menu.scale_index;
+            let old_oscs = menu.oscillators_active;
 
             menu.apply_button(button);
             display.draw_menu(&menu)?;
@@ -409,6 +431,12 @@ fn main() -> Result<()> {
                     spread_percent: menu.fine_tune_cents,
                 }) {
                     warn!("failed to send scale update to audio thread: {err}");
+                }
+            }
+
+            if menu.oscillators_active != old_oscs {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetOscillatorsActive(menu.oscillators_active)) {
+                    warn!("failed to send oscillators active to audio thread: {err}");
                 }
             }
         }

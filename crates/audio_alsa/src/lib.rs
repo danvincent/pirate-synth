@@ -25,6 +25,7 @@ pub enum AudioCommand {
     SetFm { enabled: bool, depth: f32 },
     SetSubtractive { enabled: bool, depth: f32 },
     SetScale { mode: ScaleMode, spread_percent: f32 },
+    SetOscillatorsActive(bool),
     Stop,
 }
 
@@ -75,6 +76,7 @@ fn run_audio_loop(
                 AudioCommand::SetFm { enabled, depth } => engine.set_fm(enabled, depth),
                 AudioCommand::SetSubtractive { enabled, depth } => engine.set_subtractive(enabled, depth),
                 AudioCommand::SetScale { mode, spread_percent } => engine.set_scale(mode, spread_percent),
+                AudioCommand::SetOscillatorsActive(active) => engine.set_oscillators_active(active),
                 AudioCommand::Stop => {
                     drop(stdin);
                     let _ = child.wait();

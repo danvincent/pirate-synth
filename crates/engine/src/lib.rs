@@ -35,6 +35,8 @@ struct Oscillator {
     tremolo_rate_hz: f32,
     filter_lfo_phase: f32,
     filter_state: f32,
+    muted: bool,
+    unmute_delay: u32,
 }
 
 struct CombFilter {
@@ -232,6 +234,8 @@ impl Engine {
                 tremolo_rate_hz: tremolo_rate,
                 filter_lfo_phase: i as f32 / oscillator_count as f32,
                 filter_state: 0.0,
+                muted: false,
+                unmute_delay: 0,
             });
         }
 
@@ -367,6 +371,18 @@ impl Engine {
             self.subtractive_depth_ramp = 0.0;  // Start ramp from 0 when enabling
         } else if was_enabled && !enabled {
             self.subtractive_depth_ramp = 0.0;  // Snap to 0 when disabling
+        }
+    }
+
+    pub fn set_oscillators_active(&mut self, active: bool) {
+        for osc in &mut self.oscillators {
+            if active {
+                osc.unmute_delay = 1 + lcg_next(&mut osc.rng_state) % 20;
+                // keep muted=true until delay expires
+            } else {
+                osc.muted = true;
+                osc.unmute_delay = 0;
+            }
         }
     }
 
@@ -553,6 +569,15 @@ impl Engine {
                             osc.delay_cycles_remaining -= cycles_completed;
                         }
                     }
+                    // Staggered unmute countdown
+                    if osc.unmute_delay > 0 {
+                        if osc.unmute_delay <= cycles_completed {
+                            osc.muted = false;
+                            osc.unmute_delay = 0;
+                        } else {
+                            osc.unmute_delay -= cycles_completed;
+                        }
+                    }
                     // Random scale note hop: 1/50000 chance per waveform cycle
                     if self.scale_mode != ScaleMode::None {
                         const THRESHOLD: u32 = (u32::MAX as u64 / 50_000) as u32;
@@ -581,13 +606,15 @@ impl Engine {
                     s
                 };
 
-                // Route to odd or even bus
-                if osc_idx % 2 == 1 {
-                    odd_l += s * osc.pan_l;
-                    odd_r += s * osc.pan_r;
-                } else {
-                    even_l += s * osc.pan_l;
-                    even_r += s * osc.pan_r;
+                // Route to odd or even bus (skip if muted)
+                if !osc.muted {
+                    if osc_idx % 2 == 1 {
+                        odd_l += s * osc.pan_l;
+                        odd_r += s * osc.pan_r;
+                    } else {
+                        even_l += s * osc.pan_l;
+                        even_r += s * osc.pan_r;
+                    }
                 }
             }
 

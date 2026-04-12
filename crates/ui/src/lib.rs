@@ -33,6 +33,7 @@ pub struct MenuState {
     pub fine_tune_cents: f32,
     pub stereo_spread: u8,
     pub scale_index: usize,
+    pub oscillators_active: bool,
     pub selected_item: usize,
     pub scroll_offset: usize,
 }
@@ -45,6 +46,7 @@ impl MenuState {
             fine_tune_cents,
             stereo_spread: 0,
             scale_index: 0,
+            oscillators_active: true,
             selected_item: 0,
             scroll_offset: 0,
         }
@@ -55,7 +57,7 @@ impl MenuState {
     }
 
     pub fn total_items(&self) -> usize {
-        5
+        6
     }
 
     pub fn apply_button(&mut self, button: Button) {
@@ -91,6 +93,7 @@ impl MenuState {
             2 => self.fine_tune_cents = (self.fine_tune_cents + 1.0).min(100.0),
             3 => self.stereo_spread = (self.stereo_spread + 5).min(100),
             4 => self.scale_index = (self.scale_index + 1) % SCALE_NAMES.len(),
+            5 => self.oscillators_active = !self.oscillators_active,
             _ => {}
         }
     }
@@ -114,6 +117,7 @@ impl MenuState {
                     self.scale_index -= 1;
                 }
             }
+            5 => self.oscillators_active = !self.oscillators_active,
             _ => {}
         }
     }
@@ -125,6 +129,7 @@ impl MenuState {
             format!("CENTS: {:+}", self.fine_tune_cents as i32),
             format!("SPREAD: {}", self.stereo_spread),
             format!("SCALE: {}", SCALE_NAMES[self.scale_index]),
+            format!("OSCS: {}", if self.oscillators_active { "ON" } else { "OFF" }),
         ]
     }
 }
