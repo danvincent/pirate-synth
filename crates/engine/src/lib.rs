@@ -240,6 +240,7 @@ pub struct Engine {
     scale_mode: ScaleMode,
     source_kind: SourceKind,
     granular: Option<GranularState>,
+    mix_buffer: Vec<i16>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -354,6 +355,7 @@ impl Engine {
             scale_mode: ScaleMode::None,
             source_kind: SourceKind::Wavetable,
             granular: None,
+            mix_buffer: Vec::new(),
         };
 
         engine.set_stereo_spread(0);
@@ -793,11 +795,17 @@ impl Engine {
         }
 
         if mix_granular {
-            let mut granular_out = vec![0i16; out.len()];
-            self.render_granular_i16_stereo(&mut granular_out);
-            for (dst, add) in out.iter_mut().zip(granular_out.iter()) {
+            let mut mix_buffer = std::mem::take(&mut self.mix_buffer);
+            if mix_buffer.len() != out.len() {
+                mix_buffer.resize(out.len(), 0);
+            } else {
+                mix_buffer.fill(0);
+            }
+            self.render_granular_i16_stereo(&mut mix_buffer);
+            for (dst, add) in out.iter_mut().zip(mix_buffer.iter()) {
                 *dst = dst.saturating_add(*add);
             }
+            self.mix_buffer = mix_buffer;
         }
     }
 
