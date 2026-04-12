@@ -30,6 +30,10 @@ stage_bundle() {
   if compgen -G "$ROOT_DIR/assets/wavetables/*" >/dev/null; then
     cp -a "$ROOT_DIR/assets/wavetables/." "$boot_dst/pirate-synth/wavetables/"
   fi
+  mkdir -p "$boot_dst/pirate-synth/WAV"
+  if compgen -G "$ROOT_DIR/assets/WAV/*" >/dev/null; then
+    cp -a "$ROOT_DIR/assets/WAV/." "$boot_dst/pirate-synth/WAV/"
+  fi
 }
 
 archive_bundle() {

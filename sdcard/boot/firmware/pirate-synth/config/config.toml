@@ -1,15 +1,16 @@
-sample_rate = 48000
+sample_rate = 6000
 buffer_frames = 256
-oscillators = 8
-root_key = "C"
-root_octave = 2
+oscillators = 16
+root_key = "A"
+root_octave = 1
 fine_tune_cents = 0
 wavetable_dir = "/var/lib/pirate-synth/wavetables"
+wav_dir = "/var/lib/pirate-synth/WAV"
 spi_device = "/dev/spidev0.1"
 
 # Audio effects (all feature-flagged, safe to set false if CPU load too high)
 reverb_enabled = true
-reverb_wet = 0.20
+reverb_wet = 0.33
 tremolo_enabled = true
 tremolo_depth = 0.35
 crossfade_enabled = true
@@ -23,10 +24,20 @@ fm_depth = 0.15
 subtractive_enabled = false
 subtractive_depth = 0.30
 # Scale mode: 0=N/A 1=MAJOR 2=MINOR 3=PENTA 4=DORIAN 5=MIXO 6=WHOLE 7=HIRAJOSHI 8=LYDIAN
-scale_index = 0
-# Wavetable bank: 0=A 1=B 2=C
-bank_index = 0
+scale_index = 7
+# Wavetable bank: 0=A 1=B 2=C 3=D
+bank_index = 4
 # Transition duration in seconds for cents, scale, and bank changes (±20% jitter applied)
-transition_secs = 3.0
+transition_secs = 30.0
 # Output volume 0-100 (applied instantly)
 volume = 100
+
+# Granular mode (auto-selected when WAV files exist in wav_dir)
+granular_grain_size_ms = 120.0
+granular_density_hz = 24.0
+granular_max_overlap = 16
+granular_position = 0.5
+granular_position_jitter = 0.15
+granular_attack_ms = 10.0
+granular_release_ms = 25.0
+granular_wavs = 8
