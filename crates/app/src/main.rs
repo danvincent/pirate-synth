@@ -448,6 +448,7 @@ mod tests {
         assert!((config.reverb_wet - 0.20).abs() < 0.001);
         assert!(config.tremolo_enabled);
         assert!((config.tremolo_depth - 0.35).abs() < 0.001);
+    }
     #[test]
     fn apply_user_config_overrides_selected_fields() {
         let base = AppConfig::default();
