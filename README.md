@@ -9,7 +9,7 @@ Boot-to-synth Raspberry Pi Zero project for the Pimoroni Pirate Audio Headphone 
 - `crates/ui` - ST7789 menu renderer + Pirate Audio buttons (active-low GPIO)
 - `crates/app` - synth binary wiring config, UI, and audio
 - `assets/wavetables` - source wavetable files
-- `assets/WAV` - granular source WAV files (PCM16/float32)
+- `assets/WAV` - granular source WAV files (PCM16/float32), including a default `placeholder.wav`
 - `sdcard/boot/firmware/pirate-synth` - first-boot installer/services/config staged for SD card
 - `scripts/package.sh` - cross-build + SD card bundle packaging
 
