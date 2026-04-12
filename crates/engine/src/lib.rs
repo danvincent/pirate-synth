@@ -535,6 +535,19 @@ impl Engine {
                             osc.delay_cycles_remaining -= cycles_completed;
                         }
                     }
+                    // Random scale note hop: 1/50000 chance per waveform cycle
+                    if self.scale_mode != ScaleMode::None {
+                        const THRESHOLD: u32 = (u32::MAX as u64 / 50_000) as u32;
+                        if lcg_next(&mut osc.rng_state) < THRESHOLD {
+                            let semitones = self.scale_mode.semitones();
+                            if !semitones.is_empty() {
+                                let st_idx = lcg_next(&mut osc.rng_state) as usize % semitones.len();
+                                let octave = lcg_next(&mut osc.rng_state) % 2;
+                                let cents = (semitones[st_idx] * 100) as f32 + (octave as f32 * 1200.0);
+                                osc.detune_ratio = 2.0f32.powf(cents / 1200.0);
+                            }
+                        }
+                    }
                 }
                 osc.phase = new_phase.fract();
 
