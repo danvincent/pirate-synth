@@ -37,6 +37,32 @@ install -m 0644 "$BOOT_DIR/pirate-synth.service" "$SYSTEMD_DIR/pirate-synth.serv
 systemctl daemon-reload
 systemctl enable pirate-synth.service
 
+# ---------------------------------------------------------------------------
+# Boot-time optimisations (safe on all Pi Zero W / Trixie Lite installs)
+# ---------------------------------------------------------------------------
+
+# NetworkManager still manages WiFi; this service only blocks the boot
+# sequence until every managed interface reports "online", which we never
+# need – pirate-synth and sshd both handle their own readiness.
+systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
+
+# Bluetooth shares the CYW43 chip with WiFi on the Pi Zero W but is unused.
+# Masking these frees ~4-8 s on each boot.
+systemctl mask bluetooth.service hciuart.service ModemManager.service 2>/dev/null || true
+
+# avahi (mDNS / .local resolution) is not required; saves ~1-2 s and
+# suppresses the associated socket chatter.
+systemctl mask avahi-daemon.service avahi-daemon.socket 2>/dev/null || true
+
+# Prevent apt background upgrade timers from firing during normal synth use.
+systemctl disable apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+
+# SSH socket activation: sshd only forks a process when a connection arrives,
+# so it becomes "available" in milliseconds rather than ~3 s at boot.
+# WiFi must still come up before clients can connect – no functional change.
+systemctl disable ssh.service 2>/dev/null || true
+systemctl enable ssh.socket 2>/dev/null || true
+
 touch "$SENTINEL"
 
 echo "First boot install complete. Rebooting to apply device-tree changes."

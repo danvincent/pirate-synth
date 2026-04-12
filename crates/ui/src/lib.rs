@@ -14,6 +14,10 @@ pub const KEY_NAMES: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
 
+pub const SCALE_NAMES: [&str; 9] = [
+    "N/A", "MAJOR", "MINOR", "PENTA", "DORIAN", "MIXO", "WHOLE", "HIRAJOSHI", "LYDIAN",
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
     Up,
@@ -28,6 +32,7 @@ pub struct MenuState {
     pub octave: i32,
     pub fine_tune_cents: f32,
     pub stereo_spread: u8,
+    pub scale_index: usize,
     pub selected_item: usize,
     pub scroll_offset: usize,
 }
@@ -39,6 +44,7 @@ impl MenuState {
             octave,
             fine_tune_cents,
             stereo_spread: 0,
+            scale_index: 0,
             selected_item: 0,
             scroll_offset: 0,
         }
@@ -49,7 +55,7 @@ impl MenuState {
     }
 
     pub fn total_items(&self) -> usize {
-        4
+        5
     }
 
     pub fn apply_button(&mut self, button: Button) {
@@ -84,6 +90,7 @@ impl MenuState {
             1 => self.octave = (self.octave + 1).min(8),
             2 => self.fine_tune_cents = (self.fine_tune_cents + 1.0).min(100.0),
             3 => self.stereo_spread = (self.stereo_spread + 5).min(100),
+            4 => self.scale_index = (self.scale_index + 1) % SCALE_NAMES.len(),
             _ => {}
         }
     }
@@ -100,6 +107,13 @@ impl MenuState {
             1 => self.octave = (self.octave - 1).max(0),
             2 => self.fine_tune_cents = (self.fine_tune_cents - 1.0).max(-100.0),
             3 => self.stereo_spread = self.stereo_spread.saturating_sub(5),
+            4 => {
+                if self.scale_index == 0 {
+                    self.scale_index = SCALE_NAMES.len() - 1;
+                } else {
+                    self.scale_index -= 1;
+                }
+            }
             _ => {}
         }
     }
@@ -110,6 +124,7 @@ impl MenuState {
             format!("OCT: {}", self.octave),
             format!("CENTS: {:+}", self.fine_tune_cents as i32),
             format!("SPREAD: {}", self.stereo_spread),
+            format!("SCALE: {}", SCALE_NAMES[self.scale_index]),
         ]
     }
 }
