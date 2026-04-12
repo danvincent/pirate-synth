@@ -384,13 +384,18 @@ impl Engine {
             _ => {
                 let semitones = mode.semitones();
                 let spread_cents = spread_percent.abs().min(100.0) / 100.0 * 1200.0;
+                let half_spread = spread_cents * 0.5;
                 
-                // Distribute oscillators evenly across spread range
+                // Distribute oscillators evenly across a centered spread range
                 // then snap each to nearest scale semitone
                 for i in 0..n {
-                    // Position: 0.0 to 1.0 across the spread
-                    let t = if n <= 1 { 0.5 } else { i as f32 / (n - 1) as f32 };
-                    let target_cents = t * spread_cents;
+                    // Position: -1.0 to 1.0 across the spread
+                    let t = if n <= 1 {
+                        0.0
+                    } else {
+                        (i as f32 - center) / center.max(1.0)
+                    };
+                    let target_cents = t * half_spread;
                     
                     // Find nearest scale degree (in cents = semitone * 100)
                     // Scale degrees can span multiple octaves if spread > 1200
@@ -400,14 +405,12 @@ impl Engine {
                         let mut best = base;
                         let mut best_dist = (base - target_cents).abs();
                         // Check adjacent octaves
-                        for octave_offset in [-1200.0f32, 0.0, 1200.0, 2400.0] {
+                        for octave_offset in [-2400.0f32, -1200.0, 0.0, 1200.0, 2400.0] {
                             let candidate = base + octave_offset;
-                            if candidate >= 0.0 {
-                                let dist = (candidate - target_cents).abs();
-                                if dist < best_dist {
-                                    best_dist = dist;
-                                    best = candidate;
-                                }
+                            let dist = (candidate - target_cents).abs();
+                            if dist < best_dist {
+                                best_dist = dist;
+                                best = candidate;
                             }
                         }
                         best
@@ -1472,5 +1475,24 @@ mod tests {
         let mut buf = vec![0i16; 256];
         engine.render_i16_stereo(&mut buf);
         assert!(buf.len() == 256);
+    }
+
+    #[test]
+    fn test_scale_spread_stays_centered_around_root() {
+        let table = default_sine_wavetable();
+        let mut engine =
+            Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table]).unwrap();
+
+        engine.set_scale(ScaleMode::Major, 100.0);
+
+        let mut has_below_root = false;
+        let mut has_above_root = false;
+        for osc in &engine.oscillators {
+            has_below_root |= osc.detune_ratio < 1.0;
+            has_above_root |= osc.detune_ratio > 1.0;
+        }
+
+        assert!(has_below_root, "scale spread should include detune below root");
+        assert!(has_above_root, "scale spread should include detune above root");
     }
 }
