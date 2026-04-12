@@ -1474,9 +1474,10 @@ mod tests {
 
     #[test]
     fn fm_prepass_uses_crossfaded_sample() {
-        let table_zero = Wavetable { name: "zero".to_string(), samples: vec![0.0; 8] };
-        let table_one = Wavetable { name: "one".to_string(), samples: vec![1.0; 8] };
-        let mut engine = Engine::new(48_000, 2, vec![table_zero, table_one]).unwrap();
+        let silent_wave = Wavetable { name: "silent_wave".to_string(), samples: vec![0.0; 8] };
+        let full_amplitude_wave =
+            Wavetable { name: "full_amplitude_wave".to_string(), samples: vec![1.0; 8] };
+        let mut engine = Engine::new(48_000, 2, vec![silent_wave, full_amplitude_wave]).unwrap();
         engine.set_reverb(false, 0.0);
         engine.set_tremolo(false, 0.0);
         engine.set_filter_sweep(false, 0.15, 0.80, 0.008);
@@ -1492,8 +1493,9 @@ mod tests {
         engine.render_i16_stereo(&mut out);
         let even_phase_after = engine.oscillators[0].phase;
 
-        // At xfade_t=1.0 odd oscillator sample should come from next table (0.0),
-        // so FM contribution is near zero and even oscillator advance stays tiny.
+        // For osc index 1 with two tables, cur_idx=1 and next_idx wraps to 0.
+        // At xfade_t=1.0 the sample should come fully from wrapped next_idx=0
+        // (silent_wave = 0.0), so FM contribution is near zero.
         assert!(
             even_phase_after - even_phase_before < 0.01,
             "FM pre-pass should use crossfaded odd sample"
