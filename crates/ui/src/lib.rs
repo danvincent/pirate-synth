@@ -18,6 +18,8 @@ pub const SCALE_NAMES: [&str; 9] = [
     "N/A", "MAJOR", "MINOR", "PENTA", "DORIAN", "MIXO", "WHOLE", "HIRAJOSHI", "LYDIAN",
 ];
 
+pub const BANK_NAMES: [&str; 4] = ["A", "B", "C", "D"];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
     Up,
@@ -33,6 +35,8 @@ pub struct MenuState {
     pub fine_tune_cents: f32,
     pub stereo_spread: u8,
     pub scale_index: usize,
+    pub bank_index: usize,
+    pub volume: u8,
     pub oscillators_active: bool,
     pub selected_item: usize,
     pub scroll_offset: usize,
@@ -46,6 +50,8 @@ impl MenuState {
             fine_tune_cents,
             stereo_spread: 0,
             scale_index: 0,
+            bank_index: 0,
+            volume: 100,
             oscillators_active: true,
             selected_item: 0,
             scroll_offset: 0,
@@ -57,7 +63,7 @@ impl MenuState {
     }
 
     pub fn total_items(&self) -> usize {
-        6
+        8
     }
 
     pub fn apply_button(&mut self, button: Button) {
@@ -93,7 +99,9 @@ impl MenuState {
             2 => self.fine_tune_cents = (self.fine_tune_cents + 1.0).min(100.0),
             3 => self.stereo_spread = (self.stereo_spread + 5).min(100),
             4 => self.scale_index = (self.scale_index + 1) % SCALE_NAMES.len(),
-            5 => self.oscillators_active = !self.oscillators_active,
+            5 => self.bank_index = (self.bank_index + 1) % BANK_NAMES.len(),
+            6 => self.volume = (self.volume + 10).min(100),
+            7 => self.oscillators_active = !self.oscillators_active,
             _ => {}
         }
     }
@@ -117,7 +125,15 @@ impl MenuState {
                     self.scale_index -= 1;
                 }
             }
-            5 => self.oscillators_active = !self.oscillators_active,
+            5 => {
+                if self.bank_index == 0 {
+                    self.bank_index = BANK_NAMES.len() - 1;
+                } else {
+                    self.bank_index -= 1;
+                }
+            }
+            6 => self.volume = self.volume.saturating_sub(10),
+            7 => self.oscillators_active = !self.oscillators_active,
             _ => {}
         }
     }
@@ -129,6 +145,8 @@ impl MenuState {
             format!("CENTS: {:+}", self.fine_tune_cents as i32),
             format!("SPREAD: {}", self.stereo_spread),
             format!("SCALE: {}", SCALE_NAMES[self.scale_index]),
+            format!("BANK: {}", BANK_NAMES[self.bank_index]),
+            format!("VOL: {}", self.volume),
             format!("OSCS: {}", if self.oscillators_active { "ON" } else { "OFF" }),
         ]
     }
@@ -443,10 +461,10 @@ mod tests {
     }
 
     #[test]
-    fn menu_has_five_items() {
+    fn menu_has_eight_items() {
         let menu = MenuState::new(2, 0.0);
-        assert_eq!(menu.total_items(), 5);
-        assert_eq!(menu.lines().len(), 5);
+        assert_eq!(menu.total_items(), 8);
+        assert_eq!(menu.lines().len(), 8);
     }
 
     #[test]

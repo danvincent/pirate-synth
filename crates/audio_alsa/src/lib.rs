@@ -4,7 +4,7 @@ use std::thread;
 
 use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender};
-use engine::{Engine, ScaleMode};
+use engine::{Engine, ScaleMode, Wavetable};
 
 #[derive(Clone, Debug)]
 pub struct AudioConfig {
@@ -25,6 +25,9 @@ pub enum AudioCommand {
     SetFm { enabled: bool, depth: f32 },
     SetSubtractive { enabled: bool, depth: f32 },
     SetScale { mode: ScaleMode, spread_percent: f32 },
+    SetWavetableBank(Vec<Wavetable>),
+    SetTransitionSecs(f32),
+    SetVolume(u8),
     SetOscillatorsActive(bool),
     Stop,
 }
@@ -76,6 +79,9 @@ fn run_audio_loop(
                 AudioCommand::SetFm { enabled, depth } => engine.set_fm(enabled, depth),
                 AudioCommand::SetSubtractive { enabled, depth } => engine.set_subtractive(enabled, depth),
                 AudioCommand::SetScale { mode, spread_percent } => engine.set_scale(mode, spread_percent),
+                AudioCommand::SetWavetableBank(tables) => engine.set_wavetable_bank(tables),
+                AudioCommand::SetTransitionSecs(secs) => engine.set_transition_secs(secs),
+                AudioCommand::SetVolume(level) => engine.set_volume(level),
                 AudioCommand::SetOscillatorsActive(active) => engine.set_oscillators_active(active),
                 AudioCommand::Stop => {
                     drop(stdin);

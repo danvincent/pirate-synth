@@ -35,8 +35,9 @@ struct Oscillator {
     tremolo_rate_hz: f32,
     filter_lfo_phase: f32,
     filter_state: f32,
-    muted: bool,
-    unmute_delay: u32,
+    wt_offset: usize,
+    target_detune_ratio: f32,
+    detune_ramp_rate: f32,
 }
 
 struct CombFilter {
@@ -158,6 +159,22 @@ pub struct Engine {
     subtractive_depth_ramp: f32,
     // Scale
     scale_mode: ScaleMode,
+    // Master gain for fade in/out (0.0 = silent, 1.0 = full)
+    master_gain: f32,
+    target_gain: f32,
+    // User volume (0.0 = silent, 1.0 = full); applied instantly
+    volume: f32,
+    // Fine tune cents ramp (smoothly tracks target_fine_tune_cents)
+    target_fine_tune_cents: f32,
+    // Pending wavetable bank for crossfade transition
+    pending_wavetables: Vec<Wavetable>,
+    bank_blend: f32,
+    bank_blend_target: f32,
+    // Centralised transition control
+    rng_state: u64,
+    transition_secs: f32,
+    cents_ramp_rate: f32,
+    bank_ramp_rate: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -193,6 +210,48 @@ impl ScaleMode {
 fn lcg_next(state: &mut u64) -> u32 {
     *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
     ((*state >> 33) ^ (*state >> 17)) as u32
+}
+
+fn lerp_table(table: &[f32], phase: f32) -> f32 {
+    let len = table.len() as f32;
+    let pos = phase * len;
+    let i0 = pos as usize % table.len();
+    let i1 = (i0 + 1) % table.len();
+    let frac = pos - i0 as f32;
+    table[i0] * (1.0 - frac) + table[i1] * frac
+}
+
+fn read_from_bank(tables: &[Wavetable], cur_idx: usize, next_idx: usize, phase: f32, xfade_t: f32, crossfade_enabled: bool) -> f32 {
+    let s_cur = lerp_table(&tables[cur_idx].samples, phase);
+    if crossfade_enabled && xfade_t > 0.0 {
+        let s_next = lerp_table(&tables[next_idx].samples, phase);
+        s_cur * (1.0 - xfade_t) + s_next * xfade_t
+    } else {
+        s_cur
+    }
+}
+
+fn sample_from_banks(
+    current: &[Wavetable],
+    pending: &[Wavetable],
+    bank_blend: f32,
+    cur_idx: usize,
+    next_idx: usize,
+    phase: f32,
+    xfade_t: f32,
+    crossfade_enabled: bool,
+) -> f32 {
+    let s = read_from_bank(current, cur_idx, next_idx, phase, xfade_t, crossfade_enabled);
+    if bank_blend > 0.0 && !pending.is_empty() {
+        let p_len = pending.len();
+        let p_cur = cur_idx % p_len;
+        let p_next = (p_cur + 1) % p_len;
+        // Use phase-aligned blend: same oscillator phase, both read at comparable position
+        let s_p = read_from_bank(pending, p_cur, p_next, phase, xfade_t, crossfade_enabled);
+        s * (1.0 - bank_blend) + s_p * bank_blend
+    } else {
+        s
+    }
 }
 
 impl Engine {
@@ -234,8 +293,9 @@ impl Engine {
                 tremolo_rate_hz: tremolo_rate,
                 filter_lfo_phase: i as f32 / oscillator_count as f32,
                 filter_state: 0.0,
-                muted: false,
-                unmute_delay: 0,
+                wt_offset: 0,
+                target_detune_ratio: 2.0f32.powf(cents / 1200.0),
+                detune_ramp_rate: 0.0,
             });
         }
 
@@ -268,6 +328,17 @@ impl Engine {
             subtractive_depth: 0.30,
             subtractive_depth_ramp: 0.0,
             scale_mode: ScaleMode::None,
+            master_gain: 1.0,
+            target_gain: 1.0,
+            volume: 1.0,
+            target_fine_tune_cents: 0.0,
+            pending_wavetables: Vec::new(),
+            bank_blend: 0.0,
+            bank_blend_target: 0.0,
+            rng_state: 0x517c_a7d3_9f2b_e401_u64,
+            transition_secs: 3.0,
+            cents_ramp_rate: 1.0 / (3.0 * sample_rate as f32),
+            bank_ramp_rate: 1.0 / (3.0 * sample_rate as f32),
         };
         
         engine.set_stereo_spread(0);
@@ -304,7 +375,8 @@ impl Engine {
     }
 
     pub fn set_fine_tune_cents(&mut self, cents: f32) {
-        self.fine_tune_cents = cents;
+        self.cents_ramp_rate = self.jitter_rate();
+        self.target_fine_tune_cents = cents;
     }
 
     pub fn set_stereo_spread(&mut self, spread: u8) {
@@ -328,6 +400,27 @@ impl Engine {
         if !self.wavetables.is_empty() {
             self.wavetable_offset = offset % self.wavetables.len();
         }
+    }
+
+    /// Begin a smooth crossfade to a new wavetable bank over `transition_secs`.
+    pub fn set_wavetable_bank(&mut self, tables: Vec<Wavetable>) {
+        if tables.is_empty() {
+            return;
+        }
+        self.bank_ramp_rate = self.jitter_rate();
+        self.pending_wavetables = tables;
+        self.bank_blend = 0.0;
+        self.bank_blend_target = 1.0;
+    }
+
+    /// Set the transition duration in seconds for cents, scale, and bank changes.
+    pub fn set_transition_secs(&mut self, secs: f32) {
+        self.transition_secs = secs.max(0.01);
+    }
+
+    fn jitter_rate(&mut self) -> f32 {
+        let jitter = 0.8 + (lcg_next(&mut self.rng_state) as f32 / u32::MAX as f32) * 0.4;
+        1.0 / ((self.transition_secs * jitter).max(0.001) * self.sample_rate as f32)
     }
 
     pub fn set_reverb(&mut self, enabled: bool, wet: f32) {
@@ -374,16 +467,21 @@ impl Engine {
         }
     }
 
+    /// Fade in or out over 5 seconds.
     pub fn set_oscillators_active(&mut self, active: bool) {
-        for osc in &mut self.oscillators {
-            if active {
-                osc.unmute_delay = 1 + lcg_next(&mut osc.rng_state) % 20;
-                // keep muted=true until delay expires
-            } else {
-                osc.muted = true;
-                osc.unmute_delay = 0;
-            }
-        }
+        self.target_gain = if active { 1.0 } else { 0.0 };
+    }
+
+    /// Instantly snap the master gain with no fade (use at startup).
+    pub fn set_oscillators_active_immediate(&mut self, active: bool) {
+        let g = if active { 1.0 } else { 0.0 };
+        self.master_gain = g;
+        self.target_gain = g;
+    }
+
+    /// Set volume instantly (0–100 maps to 0.0–1.0).
+    pub fn set_volume(&mut self, level: u8) {
+        self.volume = (level.min(100) as f32) / 100.0;
     }
 
     pub fn set_scale(&mut self, mode: ScaleMode, spread_percent: f32) {
@@ -396,7 +494,9 @@ impl Engine {
                 // Restore original uniform 4-cent spread
                 for (i, osc) in self.oscillators.iter_mut().enumerate() {
                     let cents = (i as f32 - center) * 4.0;
-                    osc.detune_ratio = 2.0f32.powf(cents / 1200.0);
+                    let jitter = 0.8 + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
+                    osc.target_detune_ratio = 2.0f32.powf(cents / 1200.0);
+                    osc.detune_ramp_rate = 1.0 / ((self.transition_secs * jitter).max(0.001) * self.sample_rate as f32);
                 }
             }
             _ => {
@@ -439,7 +539,9 @@ impl Engine {
                         da.partial_cmp(&db).unwrap()
                     }).unwrap_or(0.0);
                     
-                    self.oscillators[i].detune_ratio = 2.0f32.powf(nearest_cents / 1200.0);
+                    let jitter = 0.8 + (lcg_next(&mut self.oscillators[i].rng_state) as f32 / u32::MAX as f32) * 0.4;
+                    self.oscillators[i].target_detune_ratio = 2.0f32.powf(nearest_cents / 1200.0);
+                    self.oscillators[i].detune_ramp_rate = 1.0 / ((self.transition_secs * jitter).max(0.001) * self.sample_rate as f32);
                 }
             }
         }
@@ -470,28 +572,9 @@ impl Engine {
                 for (osc_idx, osc) in self.oscillators.iter().enumerate() {
                     if osc_idx % 2 == 1 {
                         // peek at current sample without advancing phase
-                        let cur_idx = (self.wavetable_offset + self.xfade_index_offset + osc_idx) % table_count;
+                        let cur_idx = (self.wavetable_offset + self.xfade_index_offset + osc.wt_offset + osc_idx) % table_count;
                         let next_idx = (cur_idx + 1) % table_count;
-                        let cur_table = &self.wavetables[cur_idx].samples;
-                        let len_cur = cur_table.len() as f32;
-                        let phase_pos_cur = osc.phase * len_cur;
-                        let i0c = phase_pos_cur as usize % cur_table.len();
-                        let i1c = (i0c + 1) % cur_table.len();
-                        let frac_c = phase_pos_cur - (i0c as f32);
-                        let s_cur = cur_table[i0c] * (1.0 - frac_c) + cur_table[i1c] * frac_c;
-
-                        let s = if self.crossfade_enabled && self.xfade_t > 0.0 {
-                            let next_table = &self.wavetables[next_idx].samples;
-                            let len_next = next_table.len() as f32;
-                            let phase_pos_next = osc.phase * len_next;
-                            let i0n = phase_pos_next as usize % next_table.len();
-                            let i1n = (i0n + 1) % next_table.len();
-                            let frac_n = phase_pos_next - (i0n as f32);
-                            let s_next = next_table[i0n] * (1.0 - frac_n) + next_table[i1n] * frac_n;
-                            s_cur * (1.0 - self.xfade_t) + s_next * self.xfade_t
-                        } else {
-                            s_cur
-                        };
+                        let s = sample_from_banks(&self.wavetables, &self.pending_wavetables, self.bank_blend, cur_idx, next_idx, osc.phase, self.xfade_t, self.crossfade_enabled);
                         acc += s;
                     }
                 }
@@ -507,37 +590,9 @@ impl Engine {
             let table_count = self.wavetables.len();
 
             for (osc_idx, osc) in self.oscillators.iter_mut().enumerate() {
-                let cur_idx = (self.wavetable_offset + self.xfade_index_offset + osc_idx) % table_count;
+                let cur_idx = (self.wavetable_offset + self.xfade_index_offset + osc.wt_offset + osc_idx) % table_count;
                 let next_idx = (cur_idx + 1) % table_count;
-
-                let s = if self.crossfade_enabled && self.xfade_t > 0.0 {
-                    let cur_table = &self.wavetables[cur_idx].samples;
-                    let next_table = &self.wavetables[next_idx].samples;
-                    let len_cur = cur_table.len() as f32;
-                    let len_next = next_table.len() as f32;
-
-                    let phase_pos_cur = osc.phase * len_cur;
-                    let i0c = phase_pos_cur as usize % cur_table.len();
-                    let i1c = (i0c + 1) % cur_table.len();
-                    let frac_c = phase_pos_cur - (i0c as f32);
-                    let s_cur = cur_table[i0c] * (1.0 - frac_c) + cur_table[i1c] * frac_c;
-
-                    let phase_pos_next = osc.phase * len_next;
-                    let i0n = phase_pos_next as usize % next_table.len();
-                    let i1n = (i0n + 1) % next_table.len();
-                    let frac_n = phase_pos_next - (i0n as f32);
-                    let s_next = next_table[i0n] * (1.0 - frac_n) + next_table[i1n] * frac_n;
-
-                    s_cur * (1.0 - self.xfade_t) + s_next * self.xfade_t
-                } else {
-                    let table = &self.wavetables[cur_idx].samples;
-                    let len = table.len() as f32;
-                    let phase_pos = osc.phase * len;
-                    let i0 = phase_pos as usize % table.len();
-                    let i1 = (i0 + 1) % table.len();
-                    let frac = phase_pos - (i0 as f32);
-                    table[i0] * (1.0 - frac) + table[i1] * frac
-                };
+                let s = sample_from_banks(&self.wavetables, &self.pending_wavetables, self.bank_blend, cur_idx, next_idx, osc.phase, self.xfade_t, self.crossfade_enabled);
                 let mut s = s;
 
                 // Apply tremolo if enabled
@@ -569,13 +624,11 @@ impl Engine {
                             osc.delay_cycles_remaining -= cycles_completed;
                         }
                     }
-                    // Staggered unmute countdown
-                    if osc.unmute_delay > 0 {
-                        if osc.unmute_delay <= cycles_completed {
-                            osc.muted = false;
-                            osc.unmute_delay = 0;
-                        } else {
-                            osc.unmute_delay -= cycles_completed;
+                    // Random wavetable advance: 1/30000 chance per waveform cycle
+                    if table_count > 1 {
+                        const WT_THRESHOLD: u32 = (u32::MAX as u64 / 30_000) as u32;
+                        if lcg_next(&mut osc.rng_state) < WT_THRESHOLD {
+                            osc.wt_offset = (osc.wt_offset + 1) % table_count;
                         }
                     }
                     // Random scale note hop: 1/50000 chance per waveform cycle
@@ -587,12 +640,23 @@ impl Engine {
                                 let st_idx = lcg_next(&mut osc.rng_state) as usize % semitones.len();
                                 let octave = lcg_next(&mut osc.rng_state) % 2;
                                 let cents = (semitones[st_idx] * 100) as f32 + (octave as f32 * 1200.0);
-                                osc.detune_ratio = 2.0f32.powf(cents / 1200.0);
+                                let jitter = 0.8 + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
+                                osc.target_detune_ratio = 2.0f32.powf(cents / 1200.0);
+                                osc.detune_ramp_rate = 1.0 / ((self.transition_secs * jitter).max(0.001) * self.sample_rate as f32);
                             }
                         }
                     }
                 }
                 osc.phase = new_phase.fract();
+
+                // Smoothly ramp detune_ratio toward target
+                if osc.detune_ramp_rate > 0.0 {
+                    if osc.detune_ratio < osc.target_detune_ratio {
+                        osc.detune_ratio = (osc.detune_ratio + osc.detune_ramp_rate).min(osc.target_detune_ratio);
+                    } else if osc.detune_ratio > osc.target_detune_ratio {
+                        osc.detune_ratio = (osc.detune_ratio - osc.detune_ramp_rate).max(osc.target_detune_ratio);
+                    }
+                }
 
                 // Apply per-oscillator filter sweep if enabled
                 let s = if self.filter_sweep_enabled {
@@ -606,15 +670,13 @@ impl Engine {
                     s
                 };
 
-                // Route to odd or even bus (skip if muted)
-                if !osc.muted {
-                    if osc_idx % 2 == 1 {
-                        odd_l += s * osc.pan_l;
-                        odd_r += s * osc.pan_r;
-                    } else {
-                        even_l += s * osc.pan_l;
-                        even_r += s * osc.pan_r;
-                    }
+                // Route to odd or even bus
+                if osc_idx % 2 == 1 {
+                    odd_l += s * osc.pan_l;
+                    odd_r += s * osc.pan_r;
+                } else {
+                    even_l += s * osc.pan_l;
+                    even_r += s * osc.pan_r;
                 }
             }
 
@@ -653,9 +715,38 @@ impl Engine {
 
             // Filter sweep is now applied per-oscillator above
 
+            // Step master gain toward target (5-second fade)
+            let fade_rate = 1.0 / (5.0 * self.sample_rate as f32);
+            if self.master_gain < self.target_gain {
+                self.master_gain = (self.master_gain + fade_rate).min(self.target_gain);
+            } else if self.master_gain > self.target_gain {
+                self.master_gain = (self.master_gain - fade_rate).max(self.target_gain);
+            }
+
+            // Step fine_tune_cents toward target (rate set with jitter by set_fine_tune_cents)
+            if self.fine_tune_cents < self.target_fine_tune_cents {
+                self.fine_tune_cents = (self.fine_tune_cents + self.cents_ramp_rate).min(self.target_fine_tune_cents);
+            } else if self.fine_tune_cents > self.target_fine_tune_cents {
+                self.fine_tune_cents = (self.fine_tune_cents - self.cents_ramp_rate).max(self.target_fine_tune_cents);
+            }
+
+            // Step bank blend toward target (rate set with jitter by set_wavetable_bank)
+            if self.bank_blend < self.bank_blend_target {
+                self.bank_blend = (self.bank_blend + self.bank_ramp_rate).min(self.bank_blend_target);
+            } else if self.bank_blend > self.bank_blend_target {
+                self.bank_blend = (self.bank_blend - self.bank_ramp_rate).max(self.bank_blend_target);
+            }
+            // When fully transitioned, promote pending to current bank
+            if self.bank_blend >= 1.0 && !self.pending_wavetables.is_empty() {
+                self.wavetables = std::mem::take(&mut self.pending_wavetables);
+                self.bank_blend = 0.0;
+                self.bank_blend_target = 0.0;
+                // Keep wavetable_offset/xfade_index_offset as-is to avoid index jump
+            }
+
             let gain = 0.25f32 / self.oscillators.len() as f32;
-            let l = (l_out * gain).clamp(-1.0, 1.0);
-            let r = (r_out * gain).clamp(-1.0, 1.0);
+            let l = (l_out * gain * self.master_gain * self.volume).clamp(-1.0, 1.0);
+            let r = (r_out * gain * self.master_gain * self.volume).clamp(-1.0, 1.0);
             frame[0] = (l * i16::MAX as f32) as i16;
             frame[1] = (r * i16::MAX as f32) as i16;
         }

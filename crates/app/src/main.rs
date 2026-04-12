@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use audio_alsa::{command_channel, spawn_audio_thread, AudioCommand, AudioConfig};
@@ -68,6 +68,15 @@ struct AppConfig {
     // Scale
     #[serde(default)]
     scale_index: usize,
+    // Wavetable bank (0=A, 1=B, 2=C)
+    #[serde(default)]
+    bank_index: usize,
+    // Output volume 0-100
+    #[serde(default = "default_volume")]
+    volume: u8,
+    // Transition duration in seconds for cents/scale/bank changes
+    #[serde(default = "default_transition_secs")]
+    transition_secs: f32,
     // Oscillators
     #[serde(default = "default_oscillators_active")]
     oscillators_active: bool,
@@ -132,7 +141,13 @@ fn default_subtractive_depth() -> f32 {
     0.30
 }
 fn default_oscillators_active() -> bool {
-    true
+    false
+}
+fn default_transition_secs() -> f32 {
+    3.0
+}
+fn default_volume() -> u8 {
+    100
 }
 
 impl Default for AppConfig {
@@ -162,7 +177,10 @@ impl Default for AppConfig {
             subtractive_enabled: false,
             subtractive_depth: default_subtractive_depth(),
             scale_index: 0,
-            oscillators_active: true,
+            bank_index: 0,
+            volume: default_volume(),
+            transition_secs: default_transition_secs(),
+            oscillators_active: false,
         }
     }
 }
@@ -211,6 +229,9 @@ struct UserConfig {
     subtractive_enabled: Option<bool>,
     subtractive_depth: Option<f32>,
     scale_index: Option<usize>,
+    bank_index: Option<usize>,
+    volume: Option<u8>,
+    transition_secs: Option<f32>,
     oscillators_active: Option<bool>,
 }
 
@@ -256,6 +277,9 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         subtractive_enabled: user.subtractive_enabled.unwrap_or(base.subtractive_enabled),
         subtractive_depth: user.subtractive_depth.unwrap_or(base.subtractive_depth),
         scale_index: user.scale_index.unwrap_or(base.scale_index),
+        bank_index: user.bank_index.unwrap_or(base.bank_index),
+        volume: user.volume.unwrap_or(base.volume),
+        transition_secs: user.transition_secs.unwrap_or(base.transition_secs),
         oscillators_active: user.oscillators_active.unwrap_or(base.oscillators_active),
     }
 }
@@ -272,6 +296,16 @@ fn scale_mode_from_index(idx: usize) -> ScaleMode {
         7 => ScaleMode::Hirajoshi,
         8 => ScaleMode::Lydian,
         _ => ScaleMode::None,
+    }
+}
+
+fn load_bank(wavetable_dir: &Path, bank_name: &str, min_count: usize) -> Result<Vec<engine::Wavetable>> {
+    let bank_dir = wavetable_dir.join(bank_name);
+    if bank_dir.is_dir() {
+        load_wavetables(&bank_dir, min_count)
+    } else {
+        // Fallback: load directly from wavetable_dir (backward compat)
+        load_wavetables(wavetable_dir, min_count)
     }
 }
 
@@ -309,16 +343,22 @@ fn main() -> Result<()> {
         config.spi_device
     );
 
-    let wavetables = load_wavetables(&config.wavetable_dir, config.oscillators).with_context(|| {
+    let initial_bank = ui::BANK_NAMES
+        .get(config.bank_index)
+        .copied()
+        .unwrap_or("A");
+    let wavetables = load_bank(&config.wavetable_dir, initial_bank, config.oscillators).with_context(|| {
         format!(
-            "failed loading wavetables from {}",
-            config.wavetable_dir.display()
+            "failed loading wavetables from {}/{}",
+            config.wavetable_dir.display(),
+            initial_bank
         )
     })?;
     info!(
-        "loaded {} wavetable(s) from {}",
+        "loaded {} wavetable(s) from {}/{}",
         wavetables.len(),
-        config.wavetable_dir.display()
+        config.wavetable_dir.display(),
+        initial_bank
     );
 
     let mut menu = MenuState::new(config.root_octave, config.fine_tune_cents);
@@ -328,6 +368,8 @@ fn main() -> Result<()> {
         .unwrap_or(0);
     menu.stereo_spread = config.stereo_spread;
     menu.scale_index = config.scale_index.min(ui::SCALE_NAMES.len() - 1);
+    menu.bank_index = config.bank_index.min(ui::BANK_NAMES.len() - 1);
+    menu.volume = config.volume.min(100);
     menu.oscillators_active = config.oscillators_active;
     if menu.key_name() != config.root_key {
         warn!(
@@ -357,9 +399,9 @@ fn main() -> Result<()> {
     engine.set_fm(config.fm_enabled, config.fm_depth);
     engine.set_subtractive(config.subtractive_enabled, config.subtractive_depth);
     engine.set_scale(scale_mode_from_index(config.scale_index), config.fine_tune_cents);
-    if !config.oscillators_active {
-        engine.set_oscillators_active(false);
-    }
+    engine.set_transition_secs(config.transition_secs);
+    engine.set_volume(config.volume);
+    engine.set_oscillators_active_immediate(config.oscillators_active);
     info!("initial frequency set to {:.2} Hz", initial_hz);
 
     let (audio_tx, audio_rx) = command_channel();
@@ -386,6 +428,11 @@ fn main() -> Result<()> {
     display.draw_menu(&menu)?;
     info!("startup complete");
 
+    const DEBOUNCE: Duration = Duration::from_millis(200);
+    let mut pending_cents: Option<(f32, Instant)> = None;
+    let mut pending_scale: Option<(usize, Instant)> = None;
+    let mut pending_bank: Option<(usize, Instant)> = None;
+
     loop {
         if let Some(button) = buttons.poll_pressed()? {
             debug!("button press: {:?}", button);
@@ -394,6 +441,8 @@ fn main() -> Result<()> {
             let old_cents = menu.fine_tune_cents;
             let old_spread = menu.stereo_spread;
             let old_scale = menu.scale_index;
+            let old_bank = menu.bank_index;
+            let old_volume = menu.volume;
             let old_oscs = menu.oscillators_active;
 
             menu.apply_button(button);
@@ -407,16 +456,7 @@ fn main() -> Result<()> {
             }
 
             if menu.fine_tune_cents != old_cents {
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetFineTuneCents(menu.fine_tune_cents)) {
-                    warn!("failed to send fine tune cents to audio thread: {err}");
-                }
-                // Also send SetScale since spread_percent changed
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
-                    mode: scale_mode_from_index(menu.scale_index),
-                    spread_percent: menu.fine_tune_cents,
-                }) {
-                    warn!("failed to send scale update to audio thread: {err}");
-                }
+                pending_cents = Some((menu.fine_tune_cents, Instant::now()));
             }
 
             if menu.stereo_spread != old_spread {
@@ -426,11 +466,16 @@ fn main() -> Result<()> {
             }
 
             if menu.scale_index != old_scale {
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
-                    mode: scale_mode_from_index(menu.scale_index),
-                    spread_percent: menu.fine_tune_cents,
-                }) {
-                    warn!("failed to send scale update to audio thread: {err}");
+                pending_scale = Some((menu.scale_index, Instant::now()));
+            }
+
+            if menu.bank_index != old_bank {
+                pending_bank = Some((menu.bank_index, Instant::now()));
+            }
+
+            if menu.volume != old_volume {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetVolume(menu.volume)) {
+                    warn!("failed to send volume to audio thread: {err}");
                 }
             }
 
@@ -438,6 +483,49 @@ fn main() -> Result<()> {
                 if let Err(err) = audio_tx.try_send(AudioCommand::SetOscillatorsActive(menu.oscillators_active)) {
                     warn!("failed to send oscillators active to audio thread: {err}");
                 }
+            }
+        }
+
+        // Flush debounced changes to audio thread
+        let now = Instant::now();
+        if let Some((cents, since)) = pending_cents {
+            if now.duration_since(since) >= DEBOUNCE {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetFineTuneCents(cents)) {
+                    warn!("failed to send fine tune cents to audio thread: {err}");
+                }
+                // Also resend scale since spread_percent ties to cents
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
+                    mode: scale_mode_from_index(menu.scale_index),
+                    spread_percent: cents,
+                }) {
+                    warn!("failed to send scale update to audio thread: {err}");
+                }
+                pending_cents = None;
+            }
+        }
+        if let Some((scale_idx, since)) = pending_scale {
+            if now.duration_since(since) >= DEBOUNCE {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
+                    mode: scale_mode_from_index(scale_idx),
+                    spread_percent: menu.fine_tune_cents,
+                }) {
+                    warn!("failed to send scale update to audio thread: {err}");
+                }
+                pending_scale = None;
+            }
+        }
+        if let Some((bank_idx, since)) = pending_bank {
+            if now.duration_since(since) >= DEBOUNCE {
+                let bank_name = ui::BANK_NAMES.get(bank_idx).copied().unwrap_or("A");
+                match load_bank(&config.wavetable_dir, bank_name, config.oscillators) {
+                    Ok(tables) => {
+                        if let Err(err) = audio_tx.try_send(AudioCommand::SetWavetableBank(tables)) {
+                            warn!("failed to send wavetable bank to audio thread: {err}");
+                        }
+                    }
+                    Err(err) => warn!("failed to load wavetable bank {bank_name}: {err}"),
+                }
+                pending_bank = None;
             }
         }
 

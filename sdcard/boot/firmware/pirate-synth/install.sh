@@ -13,10 +13,12 @@ if [[ -f "$SENTINEL" ]]; then
   exit 0
 fi
 
+config_changed=0
 ensure_line() {
   local line="$1"
   if ! grep -Fqx "$line" "$CONFIG_TXT"; then
     echo "$line" >> "$CONFIG_TXT"
+    config_changed=1
   fi
 }
 
@@ -69,5 +71,10 @@ fi
 
 touch "$SENTINEL"
 
-echo "First boot install complete. Rebooting to apply device-tree changes."
-reboot
+if [[ "$config_changed" -eq 1 ]]; then
+  echo "First boot install complete. Rebooting to apply device-tree changes."
+  reboot
+else
+  echo "First boot install complete. config.txt already up to date; no reboot needed."
+  systemctl restart pirate-synth
+fi
