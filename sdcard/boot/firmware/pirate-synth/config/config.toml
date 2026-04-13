@@ -3,7 +3,7 @@ buffer_frames = 256
 oscillators = 16
 root_key = "A"
 root_octave = 1
-fine_tune_cents = 0
+fine_tune_cents = 50
 wavetable_dir = "/var/lib/pirate-synth/wavetables"
 wav_dir = "/var/lib/pirate-synth/WAV"
 spi_device = "/dev/spidev0.1"
@@ -33,11 +33,11 @@ transition_secs = 30.0
 volume = 100
 
 # Granular mode (auto-selected when WAV files exist in wav_dir)
-granular_grain_size_ms = 120.0
+granular_grain_size_ms = 250.0
 granular_density_hz = 24.0
 granular_max_overlap = 16
-granular_position = 0.5
-granular_position_jitter = 0.15
-granular_attack_ms = 10.0
-granular_release_ms = 25.0
+granular_position = 0.1
+granular_position_jitter = 0.80
+granular_attack_ms = 120.0
+granular_release_ms = 120.0
 granular_wavs = 8

@@ -1013,6 +1013,7 @@ fn spawn_grain(
         return;
     }
 
+    let osc_idx = granular.round_robin_counter % oscillators.len();
     let lane = granular.round_robin_counter % granular.configured_wavs;
     granular.round_robin_counter = granular.round_robin_counter.wrapping_add(1);
     let source_index = (granular.source_offset + lane) % granular.sources.len();
@@ -1022,7 +1023,6 @@ fn spawn_grain(
         return;
     }
 
-    let osc_idx = granular.active_grains.len() % oscillators.len();
     let osc = &mut oscillators[osc_idx];
     let grain_len_samples =
         ((granular.config.grain_size_ms.max(1.0) / 1000.0) * output_sample_rate) as usize;
