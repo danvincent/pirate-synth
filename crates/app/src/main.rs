@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -690,7 +691,9 @@ fn main() -> Result<()> {
                 let bank_name = ui::BANK_NAMES.get(bank_idx).copied().unwrap_or("A");
                 match load_bank(&config.wavetable_dir, bank_name, config.oscillators) {
                     Ok(tables) => {
-                        if let Err(err) = audio_tx.try_send(AudioCommand::SetWavetableBank(tables)) {
+                        if let Err(err) = audio_tx
+                            .try_send(AudioCommand::SetWavetableBank(Arc::from(tables)))
+                        {
                             warn!("failed to send wavetable bank to audio thread: {err}");
                         }
                     }

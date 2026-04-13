@@ -1,6 +1,7 @@
 use std::f32::consts::PI;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use thiserror::Error;
@@ -224,7 +225,7 @@ impl Reverb {
 
 pub struct Engine {
     sample_rate: u32,
-    wavetables: Vec<Wavetable>,
+    wavetables: Arc<[Wavetable]>,
     wavetable_offset: usize,
     oscillators: Vec<Oscillator>,
     base_frequency_hz: f32,
@@ -266,7 +267,7 @@ pub struct Engine {
     // Fine tune cents ramp (smoothly tracks target_fine_tune_cents)
     target_fine_tune_cents: f32,
     // Pending wavetable bank for crossfade transition
-    pending_wavetables: Vec<Wavetable>,
+    pending_wavetables: Arc<[Wavetable]>,
     bank_blend: f32,
     bank_blend_target: f32,
     // Centralised transition control
@@ -406,7 +407,7 @@ impl Engine {
 
         let mut engine = Self {
             sample_rate,
-            wavetables,
+            wavetables: Arc::from(wavetables),
             wavetable_offset: 0,
             oscillators,
             base_frequency_hz: C2_FREQUENCY_HZ,
@@ -437,7 +438,7 @@ impl Engine {
             target_gain: 1.0,
             volume: 1.0,
             target_fine_tune_cents: 0.0,
-            pending_wavetables: Vec::new(),
+            pending_wavetables: Arc::from(Vec::<Wavetable>::new()),
             bank_blend: 0.0,
             bank_blend_target: 0.0,
             rng_state: 0x517c_a7d3_9f2b_e401_u64,
@@ -537,7 +538,7 @@ impl Engine {
     }
 
     /// Begin a smooth crossfade to a new wavetable bank over `transition_secs`.
-    pub fn set_wavetable_bank(&mut self, tables: Vec<Wavetable>) {
+    pub fn set_wavetable_bank(&mut self, tables: Arc<[Wavetable]>) {
         if tables.is_empty() {
             return;
         }

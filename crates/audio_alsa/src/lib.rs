@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::thread;
 
 use anyhow::{Context, Result};
@@ -48,7 +49,7 @@ pub enum AudioCommand {
         mode: ScaleMode,
         spread_percent: f32,
     },
-    SetWavetableBank(Vec<Wavetable>),
+    SetWavetableBank(Arc<[Wavetable]>),
     SetTransitionSecs(f32),
     SetVolume(u8),
     SetOscillatorsActive(bool),
