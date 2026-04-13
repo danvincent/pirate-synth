@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use audio_alsa::{command_channel, spawn_audio_thread, AudioCommand, AudioConfig};
@@ -69,6 +70,21 @@ struct AppConfig {
     subtractive_enabled: bool,
     #[serde(default = "default_subtractive_depth")]
     subtractive_depth: f32,
+    // Scale
+    #[serde(default)]
+    scale_index: usize,
+    // Wavetable bank (0=A, 1=B, 2=C)
+    #[serde(default)]
+    bank_index: usize,
+    // Output volume 0-100
+    #[serde(default = "default_volume")]
+    volume: u8,
+    // Transition duration in seconds for cents/scale/bank changes
+    #[serde(default = "default_transition_secs")]
+    transition_secs: f32,
+    // Oscillators
+    #[serde(default = "default_oscillators_active")]
+    oscillators_active: bool,
     // Granular
     #[serde(default = "default_granular_grain_size_ms")]
     granular_grain_size_ms: f32,
@@ -84,6 +100,10 @@ struct AppConfig {
     granular_attack_ms: f32,
     #[serde(default = "default_granular_release_ms")]
     granular_release_ms: f32,
+    #[serde(default = "default_granular_note_ms")]
+    granular_note_ms: f32,
+    #[serde(default = "default_granular_spawn_jitter")]
+    granular_spawn_jitter: f32,
     #[serde(default = "default_granular_wavs")]
     granular_wavs: usize,
 }
@@ -149,6 +169,15 @@ fn default_fm_depth() -> f32 {
 fn default_subtractive_depth() -> f32 {
     0.30
 }
+fn default_oscillators_active() -> bool {
+    false
+}
+fn default_transition_secs() -> f32 {
+    3.0
+}
+fn default_volume() -> u8 {
+    100
+}
 fn default_granular_grain_size_ms() -> f32 {
     120.0
 }
@@ -169,6 +198,12 @@ fn default_granular_attack_ms() -> f32 {
 }
 fn default_granular_release_ms() -> f32 {
     25.0
+}
+fn default_granular_note_ms() -> f32 {
+    4000.0
+}
+fn default_granular_spawn_jitter() -> f32 {
+    0.5
 }
 fn default_granular_wavs() -> usize {
     default_oscillators()
@@ -201,6 +236,11 @@ impl Default for AppConfig {
             fm_depth: default_fm_depth(),
             subtractive_enabled: false,
             subtractive_depth: default_subtractive_depth(),
+            scale_index: 0,
+            bank_index: 0,
+            volume: default_volume(),
+            transition_secs: default_transition_secs(),
+            oscillators_active: false,
             granular_grain_size_ms: default_granular_grain_size_ms(),
             granular_density_hz: default_granular_density_hz(),
             granular_max_overlap: default_granular_max_overlap(),
@@ -208,6 +248,8 @@ impl Default for AppConfig {
             granular_position_jitter: default_granular_position_jitter(),
             granular_attack_ms: default_granular_attack_ms(),
             granular_release_ms: default_granular_release_ms(),
+            granular_note_ms: default_granular_note_ms(),
+            granular_spawn_jitter: default_granular_spawn_jitter(),
             granular_wavs: default_granular_wavs(),
         }
     }
@@ -257,6 +299,11 @@ struct UserConfig {
     fm_depth: Option<f32>,
     subtractive_enabled: Option<bool>,
     subtractive_depth: Option<f32>,
+    scale_index: Option<usize>,
+    bank_index: Option<usize>,
+    volume: Option<u8>,
+    transition_secs: Option<f32>,
+    oscillators_active: Option<bool>,
     granular_grain_size_ms: Option<f32>,
     granular_density_hz: Option<f32>,
     granular_max_overlap: Option<usize>,
@@ -264,6 +311,8 @@ struct UserConfig {
     granular_position_jitter: Option<f32>,
     granular_attack_ms: Option<f32>,
     granular_release_ms: Option<f32>,
+    granular_note_ms: Option<f32>,
+    granular_spawn_jitter: Option<f32>,
     granular_wavs: Option<usize>,
 }
 
@@ -313,6 +362,11 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         fm_depth: user.fm_depth.unwrap_or(base.fm_depth),
         subtractive_enabled: user.subtractive_enabled.unwrap_or(base.subtractive_enabled),
         subtractive_depth: user.subtractive_depth.unwrap_or(base.subtractive_depth),
+        scale_index: user.scale_index.unwrap_or(base.scale_index),
+        bank_index: user.bank_index.unwrap_or(base.bank_index),
+        volume: user.volume.unwrap_or(base.volume),
+        transition_secs: user.transition_secs.unwrap_or(base.transition_secs),
+        oscillators_active: user.oscillators_active.unwrap_or(base.oscillators_active),
         granular_grain_size_ms: user
             .granular_grain_size_ms
             .unwrap_or(base.granular_grain_size_ms),
@@ -326,6 +380,8 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
             .unwrap_or(base.granular_position_jitter),
         granular_attack_ms: user.granular_attack_ms.unwrap_or(base.granular_attack_ms),
         granular_release_ms: user.granular_release_ms.unwrap_or(base.granular_release_ms),
+        granular_note_ms: user.granular_note_ms.unwrap_or(base.granular_note_ms),
+        granular_spawn_jitter: user.granular_spawn_jitter.unwrap_or(base.granular_spawn_jitter),
         granular_wavs: user.granular_wavs.unwrap_or(base.granular_wavs),
     }
 }
@@ -333,6 +389,8 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
 fn granular_config(config: &AppConfig) -> GranularConfig {
     GranularConfig {
         grain_size_ms: config.granular_grain_size_ms,
+        grain_note_ms: config.granular_note_ms,
+        spawn_jitter: config.granular_spawn_jitter,
         grain_density_hz: config.granular_density_hz,
         max_overlapping_grains: config.granular_max_overlap.max(1),
         position: config.granular_position.clamp(0.0, 1.0),
@@ -360,7 +418,7 @@ fn apply_engine_params(engine: &mut Engine, menu: &MenuState, config: &AppConfig
     engine.set_granular_wavs(menu.granular_wavs);
 }
 
-fn initialize_engine(config: &AppConfig) -> Result<Engine> {
+fn initialize_engine(config: &AppConfig, bank_name: &str) -> Result<Engine> {
     let wav_sources = if config.wav_dir.exists() {
         load_wav_sources(&config.wav_dir).with_context(|| {
             format!(
@@ -373,16 +431,18 @@ fn initialize_engine(config: &AppConfig) -> Result<Engine> {
     };
     if wav_sources.is_empty() {
         let wavetables =
-            load_wavetables(&config.wavetable_dir, config.oscillators).with_context(|| {
+            load_bank(&config.wavetable_dir, bank_name, config.oscillators).with_context(|| {
                 format!(
-                    "failed loading wavetables from {}",
-                    config.wavetable_dir.display()
+                    "failed loading wavetables from {}/{}",
+                    config.wavetable_dir.display(),
+                    bank_name
                 )
             })?;
         info!(
-            "loaded {} wavetable(s) from {}",
+            "loaded {} wavetable(s) from {}/{}",
             wavetables.len(),
-            config.wavetable_dir.display()
+            config.wavetable_dir.display(),
+            bank_name
         );
         Engine::new(config.sample_rate, config.oscillators, wavetables)
     } else {
@@ -412,6 +472,16 @@ fn scale_mode_from_index(idx: usize) -> ScaleMode {
         7 => ScaleMode::Hirajoshi,
         8 => ScaleMode::Lydian,
         _ => ScaleMode::None,
+    }
+}
+
+fn load_bank(wavetable_dir: &Path, bank_name: &str, min_count: usize) -> Result<Vec<engine::Wavetable>> {
+    let bank_dir = wavetable_dir.join(bank_name);
+    if bank_dir.is_dir() {
+        load_wavetables(&bank_dir, min_count)
+    } else {
+        // Fallback: load directly from wavetable_dir (backward compat)
+        load_wavetables(wavetable_dir, min_count)
     }
 }
 
@@ -450,6 +520,10 @@ fn main() -> Result<()> {
         config.spi_device
     );
 
+    let initial_bank = ui::BANK_NAMES
+        .get(config.bank_index)
+        .copied()
+        .unwrap_or("A");
     let mut menu = MenuState::new(
         config.root_octave,
         config.fine_tune_cents,
@@ -460,6 +534,10 @@ fn main() -> Result<()> {
         .position(|k| *k == config.root_key)
         .unwrap_or(0);
     menu.stereo_spread = config.stereo_spread;
+    menu.scale_index = config.scale_index.min(ui::SCALE_NAMES.len() - 1);
+    menu.bank_index = config.bank_index.min(ui::BANK_NAMES.len() - 1);
+    menu.volume = config.volume.min(100);
+    menu.oscillators_active = config.oscillators_active;
     if menu.key_name() != config.root_key {
         warn!(
             "unknown root_key '{}' in config, falling back to '{}'",
@@ -476,11 +554,15 @@ fn main() -> Result<()> {
     }
 
     info!("initializing synth engine");
-    let mut engine = initialize_engine(&config)?;
+    let mut engine = initialize_engine(&config, initial_bank)?;
     info!("selected synthesis source: {:?}", engine.source_kind());
     let initial_hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
     engine.set_frequency(initial_hz);
     apply_engine_params(&mut engine, &menu, &config);
+    engine.set_scale(scale_mode_from_index(config.scale_index), config.fine_tune_cents);
+    engine.set_transition_secs(config.transition_secs);
+    engine.set_volume(config.volume);
+    engine.set_oscillators_active_immediate(config.oscillators_active);
     info!("initial frequency set to {:.2} Hz", initial_hz);
 
     let (audio_tx, audio_rx) = command_channel();
@@ -507,6 +589,11 @@ fn main() -> Result<()> {
     display.draw_menu(&menu)?;
     info!("startup complete");
 
+    const DEBOUNCE: Duration = Duration::from_millis(200);
+    let mut pending_cents: Option<(f32, Instant)> = None;
+    let mut pending_scale: Option<(usize, Instant)> = None;
+    let mut pending_bank: Option<(usize, Instant)> = None;
+
     loop {
         if let Some(button) = buttons.poll_pressed()? {
             debug!("button press: {:?}", button);
@@ -515,6 +602,9 @@ fn main() -> Result<()> {
             let old_cents = menu.fine_tune_cents;
             let old_spread = menu.stereo_spread;
             let old_scale = menu.scale_index;
+            let old_bank = menu.bank_index;
+            let old_volume = menu.volume;
+            let old_oscs = menu.oscillators_active;
             let old_granular_wavs = menu.granular_wavs;
 
             menu.apply_button(button);
@@ -528,18 +618,7 @@ fn main() -> Result<()> {
             }
 
             if menu.fine_tune_cents != old_cents {
-                if let Err(err) =
-                    audio_tx.try_send(AudioCommand::SetFineTuneCents(menu.fine_tune_cents))
-                {
-                    warn!("failed to send fine tune cents to audio thread: {err}");
-                }
-                // Also send SetScale since spread_percent changed
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
-                    mode: scale_mode_from_index(menu.scale_index),
-                    spread_percent: menu.fine_tune_cents,
-                }) {
-                    warn!("failed to send scale update to audio thread: {err}");
-                }
+                pending_cents = Some((menu.fine_tune_cents, Instant::now()));
             }
 
             if menu.stereo_spread != old_spread {
@@ -551,11 +630,22 @@ fn main() -> Result<()> {
             }
 
             if menu.scale_index != old_scale {
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
-                    mode: scale_mode_from_index(menu.scale_index),
-                    spread_percent: menu.fine_tune_cents,
-                }) {
-                    warn!("failed to send scale update to audio thread: {err}");
+                pending_scale = Some((menu.scale_index, Instant::now()));
+            }
+
+            if menu.bank_index != old_bank {
+                pending_bank = Some((menu.bank_index, Instant::now()));
+            }
+
+            if menu.volume != old_volume {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetVolume(menu.volume)) {
+                    warn!("failed to send volume to audio thread: {err}");
+                }
+            }
+
+            if menu.oscillators_active != old_oscs {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetOscillatorsActive(menu.oscillators_active)) {
+                    warn!("failed to send oscillators active to audio thread: {err}");
                 }
             }
 
@@ -568,6 +658,50 @@ fn main() -> Result<()> {
             }
         }
 
+        // Flush debounced changes to audio thread
+        let now = Instant::now();
+        if let Some((cents, since)) = pending_cents {
+            if now.duration_since(since) >= DEBOUNCE {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetFineTuneCents(cents)) {
+                    warn!("failed to send fine tune cents to audio thread: {err}");
+                }
+                // Also resend scale since spread_percent ties to cents
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
+                    mode: scale_mode_from_index(menu.scale_index),
+                    spread_percent: cents,
+                }) {
+                    warn!("failed to send scale update to audio thread: {err}");
+                }
+                pending_cents = None;
+            }
+        }
+        if let Some((scale_idx, since)) = pending_scale {
+            if now.duration_since(since) >= DEBOUNCE {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
+                    mode: scale_mode_from_index(scale_idx),
+                    spread_percent: menu.fine_tune_cents,
+                }) {
+                    warn!("failed to send scale update to audio thread: {err}");
+                }
+                pending_scale = None;
+            }
+        }
+        if let Some((bank_idx, since)) = pending_bank {
+            if now.duration_since(since) >= DEBOUNCE {
+                let bank_name = ui::BANK_NAMES.get(bank_idx).copied().unwrap_or("A");
+                match load_bank(&config.wavetable_dir, bank_name, config.oscillators) {
+                    Ok(tables) => {
+                        if let Err(err) = audio_tx
+                            .try_send(AudioCommand::SetWavetableBank(Arc::from(tables)))
+                        {
+                            warn!("failed to send wavetable bank to audio thread: {err}");
+                        }
+                    }
+                    Err(err) => warn!("failed to load wavetable bank {bank_name}: {err}"),
+                }
+                pending_bank = None;
+            }
+        }
         std::thread::sleep(Duration::from_millis(25));
 
         if args.iter().any(|arg| arg == "--oneshot") {

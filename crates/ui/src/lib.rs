@@ -26,6 +26,8 @@ pub const SCALE_NAMES: [&str; 9] = [
     "LYDIAN",
 ];
 
+pub const BANK_NAMES: [&str; 4] = ["A", "B", "C", "D"];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
     Up,
@@ -41,6 +43,9 @@ pub struct MenuState {
     pub fine_tune_cents: f32,
     pub stereo_spread: u8,
     pub scale_index: usize,
+    pub bank_index: usize,
+    pub volume: u8,
+    pub oscillators_active: bool,
     pub granular_wavs: usize,
     pub selected_item: usize,
     pub scroll_offset: usize,
@@ -54,6 +59,9 @@ impl MenuState {
             fine_tune_cents,
             stereo_spread: 0,
             scale_index: 0,
+            bank_index: 0,
+            volume: 100,
+            oscillators_active: true,
             granular_wavs,
             selected_item: 0,
             scroll_offset: 0,
@@ -65,7 +73,7 @@ impl MenuState {
     }
 
     pub fn total_items(&self) -> usize {
-        6
+        9
     }
 
     pub fn apply_button(&mut self, button: Button) {
@@ -101,7 +109,10 @@ impl MenuState {
             2 => self.fine_tune_cents = (self.fine_tune_cents + 1.0).min(100.0),
             3 => self.stereo_spread = (self.stereo_spread + 5).min(100),
             4 => self.scale_index = (self.scale_index + 1) % SCALE_NAMES.len(),
-            5 => self.granular_wavs = (self.granular_wavs + 1).min(64),
+            5 => self.bank_index = (self.bank_index + 1) % BANK_NAMES.len(),
+            6 => self.volume = (self.volume + 10).min(100),
+            7 => self.oscillators_active = !self.oscillators_active,
+            8 => self.granular_wavs = (self.granular_wavs + 1).min(64),
             _ => {}
         }
     }
@@ -125,7 +136,16 @@ impl MenuState {
                     self.scale_index -= 1;
                 }
             }
-            5 => self.granular_wavs = self.granular_wavs.saturating_sub(1),
+            5 => {
+                if self.bank_index == 0 {
+                    self.bank_index = BANK_NAMES.len() - 1;
+                } else {
+                    self.bank_index -= 1;
+                }
+            }
+            6 => self.volume = self.volume.saturating_sub(10),
+            7 => self.oscillators_active = !self.oscillators_active,
+            8 => self.granular_wavs = self.granular_wavs.saturating_sub(1),
             _ => {}
         }
     }
@@ -137,6 +157,9 @@ impl MenuState {
             format!("CENTS: {:+}", self.fine_tune_cents as i32),
             format!("SPREAD: {}", self.stereo_spread),
             format!("SCALE: {}", SCALE_NAMES[self.scale_index]),
+            format!("BANK: {}", BANK_NAMES[self.bank_index]),
+            format!("VOL: {}", self.volume),
+            format!("OSCS: {}", if self.oscillators_active { "ON" } else { "OFF" }),
             format!("GRAN WAVS: {}", self.granular_wavs),
         ]
     }
@@ -451,10 +474,10 @@ mod tests {
     }
 
     #[test]
-    fn menu_has_six_items() {
+    fn menu_has_nine_items() {
         let menu = MenuState::new(2, 0.0, 8);
-        assert_eq!(menu.total_items(), 6);
-        assert_eq!(menu.lines().len(), 6);
+        assert_eq!(menu.total_items(), 9);
+        assert_eq!(menu.lines().len(), 9);
     }
 
     #[test]
@@ -484,13 +507,13 @@ mod tests {
         assert_eq!(lines[1], "OCT: 3");
         assert_eq!(lines[2], "CENTS: +5");
         assert_eq!(lines[3], "SPREAD: 25");
-        assert_eq!(lines[5], "GRAN WAVS: 9");
+        assert_eq!(lines[8], "GRAN WAVS: 9");
     }
 
     #[test]
     fn granular_wavs_menu_item_allows_zero() {
         let mut menu = MenuState::new(2, 0.0, 1);
-        menu.selected_item = 5;
+        menu.selected_item = 8;
         menu.apply_button(Button::Back);
         assert_eq!(menu.granular_wavs, 0);
     }

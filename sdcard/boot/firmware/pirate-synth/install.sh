@@ -7,16 +7,22 @@ SYSTEMD_DIR="/etc/systemd/system"
 CONFIG_TXT="/boot/firmware/config.txt"
 
 mkdir -p /var/lib/pirate-synth /etc/pirate-synth
+if [[ ! -f "$CONFIG_TXT" ]]; then
+  echo "Creating missing $CONFIG_TXT"
+  touch "$CONFIG_TXT"
+fi
 
 if [[ -f "$SENTINEL" ]]; then
   echo "pirate-synth first boot already completed"
   exit 0
 fi
 
+config_changed=0
 ensure_line() {
   local line="$1"
   if ! grep -Fqx "$line" "$CONFIG_TXT"; then
     echo "$line" >> "$CONFIG_TXT"
+    config_changed=1
   fi
 }
 
@@ -30,10 +36,12 @@ apt-get install -y --no-install-recommends alsa-utils
 
 install -m 0755 "$BOOT_DIR/bin/pirate_synth" /usr/local/bin/pirate_synth
 install -m 0644 "$BOOT_DIR/config/config.toml" /etc/pirate-synth/config.toml
-rm -rf /var/lib/pirate-synth/wavetables
-cp -a "$BOOT_DIR/wavetables" /var/lib/pirate-synth/wavetables
-rm -rf /var/lib/pirate-synth/WAV
-cp -a "$BOOT_DIR/WAV" /var/lib/pirate-synth/WAV
+if [[ ! -d /var/lib/pirate-synth/wavetables ]]; then
+  cp -a "$BOOT_DIR/wavetables" /var/lib/pirate-synth/wavetables
+fi
+if [[ ! -d /var/lib/pirate-synth/WAV ]]; then
+  cp -a "$BOOT_DIR/WAV" /var/lib/pirate-synth/WAV
+fi
 
 install -m 0644 "$BOOT_DIR/pirate-synth.service" "$SYSTEMD_DIR/pirate-synth.service"
 systemctl daemon-reload
@@ -71,5 +79,10 @@ fi
 
 touch "$SENTINEL"
 
-echo "First boot install complete. Rebooting to apply device-tree changes."
-reboot
+if [[ "$config_changed" -eq 1 ]]; then
+  echo "First boot install complete. Rebooting to apply device-tree changes."
+  reboot
+else
+  echo "First boot install complete. config.txt already up to date; no reboot needed."
+  systemctl restart pirate-synth
+fi
