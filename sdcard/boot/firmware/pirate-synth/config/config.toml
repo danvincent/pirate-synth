@@ -26,7 +26,7 @@ subtractive_depth = 0.30
 # Scale mode: 0=N/A 1=MAJOR 2=MINOR 3=PENTA 4=DORIAN 5=MIXO 6=WHOLE 7=HIRAJOSHI 8=LYDIAN
 scale_index = 7
 # Wavetable bank: 0=A 1=B 2=C 3=D
-bank_index = 4
+bank_index = 3
 # Transition duration in seconds for cents, scale, and bank changes (±20% jitter applied)
 transition_secs = 30.0
 # Output volume 0-100 (applied instantly)
