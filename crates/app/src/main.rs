@@ -680,7 +680,8 @@ fn main() -> Result<()> {
                 }
                 pending_bank = None;
             }
-        }(Duration::from_millis(25));
+        }
+        std::thread::sleep(Duration::from_millis(25));
 
         if args.iter().any(|arg| arg == "--oneshot") {
             info!("--oneshot enabled, requesting audio stop");
