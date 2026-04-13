@@ -32,6 +32,11 @@ pub enum SourceKind {
 #[derive(Clone, Debug)]
 pub struct GranularConfig {
     pub grain_size_ms: f32,
+    /// Total note duration in ms; grain loops its WAV window for this long before expiring.
+    /// Use grain_size_ms as the looped window; grain_note_ms as overall lifespan.
+    pub grain_note_ms: f32,
+    /// Spawn interval jitter: ±this fraction of spawn interval is added randomly each spawn.
+    pub spawn_jitter: f32,
     pub grain_density_hz: f32,
     pub max_overlapping_grains: usize,
     pub position: f32,
@@ -43,13 +48,15 @@ pub struct GranularConfig {
 impl Default for GranularConfig {
     fn default() -> Self {
         Self {
-            grain_size_ms: 120.0,
-            grain_density_hz: 24.0,
+            grain_size_ms: 250.0,
+            grain_note_ms: 4000.0,
+            spawn_jitter: 0.5,
+            grain_density_hz: 4.0,
             max_overlapping_grains: 16,
             position: 0.5,
             position_jitter: 0.15,
-            envelope_attack_ms: 10.0,
-            envelope_release_ms: 25.0,
+            envelope_attack_ms: 500.0,
+            envelope_release_ms: 500.0,
         }
     }
 }
@@ -68,6 +75,7 @@ struct ActiveGrain {
     sample_offset: f32,
     playback_ratio: f32,
     sample_length: usize,
+    window_source_samples: usize,
     age_samples: usize,
     attack_samples: usize,
     release_samples: usize,
@@ -84,11 +92,18 @@ struct GranularState {
     source_offset: usize,
     configured_wavs: usize,
     round_robin_counter: usize,
+    rng_state: u64,
+    initialized: bool,
 }
 
 impl GranularState {
     fn new(sources: Vec<GranularSource>, config: GranularConfig) -> Self {
         let configured_wavs = sources.len();
+        // Seed rng from source sample counts so each load has a unique phase.
+        let rng_state = sources.iter().fold(0xdeadbeef_cafebabe_u64, |acc, s| {
+            acc.wrapping_add(s.samples.len() as u64)
+               .wrapping_mul(6364136223846793005_u64)
+        });
         Self {
             sources,
             config,
@@ -97,6 +112,8 @@ impl GranularState {
             source_offset: 0,
             configured_wavs,
             round_robin_counter: 0,
+            rng_state,
+            initialized: false,
         }
     }
 }
@@ -928,6 +945,15 @@ impl Engine {
 
         let spawn_interval_samples =
             (sample_rate / granular.config.grain_density_hz.max(0.1)).max(1.0);
+
+        // On first render, randomize the initial spawn timer so grains in different
+        // sessions/configurations don't all start in phase.
+        if !granular.initialized {
+            granular.initialized = true;
+            let frac = lcg_next(&mut granular.rng_state) as f32 / u32::MAX as f32;
+            granular.samples_until_next_grain = frac * spawn_interval_samples;
+        }
+
         granular.samples_until_next_grain -= 1.0;
         while granular.samples_until_next_grain <= 0.0 {
             spawn_grain(
@@ -938,6 +964,10 @@ impl Engine {
                 fine_tune_cents,
             );
             granular.samples_until_next_grain += spawn_interval_samples;
+            // Apply jitter so successive grains don't fire at a rigid interval.
+            let jitter_range = granular.config.spawn_jitter.clamp(0.0, 1.0) * spawn_interval_samples;
+            let jitter_val = (lcg_next(&mut granular.rng_state) as f32 / u32::MAX as f32) * 2.0 - 1.0;
+            granular.samples_until_next_grain += jitter_val * jitter_range;
         }
 
         let mut left = 0.0f32;
@@ -945,10 +975,23 @@ impl Engine {
         let mut idx = 0usize;
         while idx < granular.active_grains.len() {
             let grain = &mut granular.active_grains[idx];
+            // Expire grain when its full note duration is complete.
+            if grain.age_samples >= grain.sample_length {
+                granular.active_grains.swap_remove(idx);
+                continue;
+            }
             let source = &granular.sources[grain.source_index];
             let source_len = source.samples.len() as f32;
+            // Loop the grain window: when we've traversed grain_size_ms of source audio,
+            // wrap back to the start of the window to continue the note.
+            if grain.window_source_samples >= 2
+                && grain.sample_offset >= grain.window_source_samples as f32
+            {
+                grain.sample_offset -= grain.window_source_samples as f32;
+            }
             let pos = grain.start_sample + grain.sample_offset;
-            if grain.age_samples >= grain.sample_length || pos + 1.0 >= source_len {
+            // Safety: if somehow the grain position escapes the source, remove it.
+            if pos + 1.0 >= source_len {
                 granular.active_grains.swap_remove(idx);
                 continue;
             }
@@ -1024,14 +1067,31 @@ fn spawn_grain(
     }
 
     let osc = &mut oscillators[osc_idx];
-    let grain_len_samples =
-        ((granular.config.grain_size_ms.max(1.0) / 1000.0) * output_sample_rate) as usize;
-    let grain_len_samples = grain_len_samples.max(8);
+
+    // grain_size_ms is the WAV window size (texture chunk); grain_note_ms is the total
+    // note lifespan. If grain_note_ms is 0 or unset, fall back to grain_size_ms.
+    let note_ms = if granular.config.grain_note_ms > 0.0 {
+        granular.config.grain_note_ms
+    } else {
+        granular.config.grain_size_ms
+    };
+    let note_len_samples =
+        ((note_ms.max(1.0) / 1000.0) * output_sample_rate) as usize;
+    let note_len_samples = note_len_samples.max(8);
+
+    // Compute the source-space window this grain loops through.
+    let window_source_samples =
+        ((granular.config.grain_size_ms.max(1.0) / 1000.0) * source.sample_rate as f32) as usize;
 
     let jitter = (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 2.0 - 1.0;
     let position = (granular.config.position + jitter * granular.config.position_jitter.max(0.0))
         .clamp(0.0, 1.0);
-    let start_sample = position * (source_len.saturating_sub(grain_len_samples + 1) as f32);
+
+    // Clamp window to what's actually available in the source from start_sample.
+    let max_start = source_len.saturating_sub(window_source_samples.max(2) + 1);
+    let start_sample = position * max_start as f32;
+    let avail = source_len.saturating_sub(start_sample as usize).saturating_sub(2);
+    let window_source_samples = window_source_samples.min(avail).max(1);
 
     // Base C2 is used by the wavetable drone path, so we keep pitch relationships aligned.
     let root_ratio = (base_frequency_hz / C2_FREQUENCY_HZ).max(0.01);
@@ -1051,7 +1111,8 @@ fn spawn_grain(
         start_sample,
         sample_offset: 0.0,
         playback_ratio,
-        sample_length: grain_len_samples,
+        sample_length: note_len_samples,
+        window_source_samples,
         age_samples: 0,
         attack_samples: attack,
         release_samples: release,

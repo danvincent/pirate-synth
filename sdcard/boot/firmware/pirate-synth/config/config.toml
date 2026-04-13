@@ -34,10 +34,12 @@ volume = 100
 
 # Granular mode (auto-selected when WAV files exist in wav_dir)
 granular_grain_size_ms = 250.0
-granular_density_hz = 24.0
+granular_note_ms = 4000.0
+granular_density_hz = 4.0
 granular_max_overlap = 16
 granular_position = 0.1
-granular_position_jitter = 0.80
-granular_attack_ms = 120.0
-granular_release_ms = 120.0
+granular_position_jitter = 0.4
+granular_attack_ms = 500.0
+granular_release_ms = 500.0
+granular_spawn_jitter = 0.5
 granular_wavs = 8
