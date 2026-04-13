@@ -82,6 +82,7 @@ struct ActiveGrain {
     release_samples: usize,
     pan_l: f32,
     pan_r: f32,
+    rng_state: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -971,6 +972,8 @@ impl Engine {
             granular.samples_until_next_grain += jitter_val * jitter_range;
         }
 
+        let cfg_position = granular.config.position;
+        let cfg_position_jitter = granular.config.position_jitter;
         let mut left = 0.0f32;
         let mut right = 0.0f32;
         let mut idx = 0usize;
@@ -989,6 +992,14 @@ impl Engine {
                 && grain.sample_offset >= grain.window_source_samples as f32
             {
                 grain.sample_offset -= grain.window_source_samples as f32;
+                // Jump to a fresh random position within [position, position + position_jitter]
+                // so every window loop plays a different part of the source.
+                let rnd = lcg_next(&mut grain.rng_state) as f32 / u32::MAX as f32;
+                let new_position =
+                    (cfg_position + rnd * cfg_position_jitter.max(0.0)).clamp(0.0, 1.0);
+                let src_len = source.samples.len();
+                let max_start = src_len.saturating_sub(grain.window_source_samples.max(2) + 1);
+                grain.start_sample = new_position * max_start as f32;
             }
             let pos = grain.start_sample + grain.sample_offset;
             // Safety: if somehow the grain position escapes the source, remove it.
@@ -1085,6 +1096,7 @@ fn spawn_grain(
         ((granular.config.grain_size_ms.max(1.0) / 1000.0) * source.sample_rate as f32) as usize;
 
     let jitter = (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 2.0 - 1.0;
+    let grain_rng_state = osc.rng_state;
     let position = (granular.config.position + jitter * granular.config.position_jitter.max(0.0))
         .clamp(0.0, 1.0);
 
@@ -1119,6 +1131,7 @@ fn spawn_grain(
         release_samples: release,
         pan_l: osc.pan_l,
         pan_r: osc.pan_r,
+        rng_state: grain_rng_state,
     });
 }
 
