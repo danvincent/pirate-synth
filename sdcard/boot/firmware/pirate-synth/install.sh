@@ -7,7 +7,10 @@ SYSTEMD_DIR="/etc/systemd/system"
 CONFIG_TXT="/boot/firmware/config.txt"
 
 mkdir -p /var/lib/pirate-synth /etc/pirate-synth
-touch "$CONFIG_TXT"
+if [[ ! -f "$CONFIG_TXT" ]]; then
+  echo "Creating missing $CONFIG_TXT"
+  touch "$CONFIG_TXT"
+fi
 
 if [[ -f "$SENTINEL" ]]; then
   echo "pirate-synth first boot already completed"
