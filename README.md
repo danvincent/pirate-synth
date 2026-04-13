@@ -1,5 +1,7 @@
 # pirate-synth
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Boot-to-synth Raspberry Pi Zero project for the Pimoroni Pirate Audio Headphone Amp.
 
 ## Repository layout
@@ -12,6 +14,17 @@ Boot-to-synth Raspberry Pi Zero project for the Pimoroni Pirate Audio Headphone 
 - `assets/WAV` - granular source WAV files (PCM16/float32), including a default `placeholder.wav`
 - `sdcard/boot/firmware/pirate-synth` - first-boot installer/services/config staged for SD card
 - `scripts/package.sh` - cross-build + SD card bundle packaging
+
+## Features
+
+- Wavetable synthesis with 8 built-in waveforms (sine, triangle, sawtooth, square, pulse, etc.)
+- Granular synthesis mode (auto-selected when WAV files are present)
+- Per-oscillator detune, drift LFO, stereo spread
+- Effects: reverb (Schroeder), tremolo, crossfade, filter sweep, FM, subtractive
+- 9 scale modes (chromatic, major, minor, pentatonic, dorian, etc.)
+- ST7789 240×240 display menu via SPI
+- First-boot installer for Raspberry Pi OS Lite
+- Offline UI rendering (`--render-ui`) for development without hardware
 
 ## Build and package in Codespaces/Linux
 
@@ -109,3 +122,11 @@ granular_wavs = 8
 - Display control pins: DC BCM9, backlight BCM13
 - Runtime access is through `rppal` (GPIO character-device `/dev/gpiomem` + SPI `/dev/spidev*`), not legacy `/sys/class/gpio`
 - `pirate-synth.service` logs startup and hardware init to journald (`journalctl -u pirate-synth -b`)
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build prerequisites, running tests, and pull request guidelines.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Copyright 2026 Daniel Vincent.
