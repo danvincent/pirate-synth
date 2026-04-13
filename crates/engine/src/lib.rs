@@ -438,7 +438,7 @@ impl Engine {
             target_gain: 1.0,
             volume: 1.0,
             target_fine_tune_cents: 0.0,
-            pending_wavetables: Arc::from(Vec::<Wavetable>::new()),
+            pending_wavetables: Arc::from([]),
             bank_blend: 0.0,
             bank_blend_target: 0.0,
             rng_state: 0x517c_a7d3_9f2b_e401_u64,
