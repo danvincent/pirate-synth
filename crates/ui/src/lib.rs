@@ -44,25 +44,31 @@ pub struct MenuState {
     pub stereo_spread: u8,
     pub scale_index: usize,
     pub bank_index: usize,
-    pub volume: u8,
+    pub wt_volume: u8,
+    pub gr_volume: u8,
     pub oscillators_active: bool,
-    pub granular_wavs: usize,
+    pub granular_active: bool,
+    pub osc_count: usize,
+    pub gr_voices: usize,
     pub selected_item: usize,
     pub scroll_offset: usize,
 }
 
 impl MenuState {
-    pub fn new(octave: i32, fine_tune_cents: f32, granular_wavs: usize) -> Self {
+    pub fn new(fine_tune_cents: f32, osc_count: usize, gr_voices: usize) -> Self {
         Self {
-            key_index: 0,
-            octave,
+            key_index: 9,
+            octave: 1,
             fine_tune_cents,
-            stereo_spread: 0,
-            scale_index: 0,
+            stereo_spread: 100,
+            scale_index: 7,
             bank_index: 0,
-            volume: 100,
-            oscillators_active: true,
-            granular_wavs,
+            wt_volume: 50,
+            gr_volume: 50,
+            oscillators_active: false,
+            granular_active: false,
+            osc_count,
+            gr_voices,
             selected_item: 0,
             scroll_offset: 0,
         }
@@ -73,7 +79,7 @@ impl MenuState {
     }
 
     pub fn total_items(&self) -> usize {
-        9
+        12
     }
 
     pub fn apply_button(&mut self, button: Button) {
@@ -104,63 +110,72 @@ impl MenuState {
 
     fn increment_selected_value(&mut self) {
         match self.selected_item {
-            0 => self.key_index = (self.key_index + 1) % KEY_NAMES.len(),
-            1 => self.octave = (self.octave + 1).min(8),
-            2 => self.fine_tune_cents = (self.fine_tune_cents + 1.0).min(100.0),
-            3 => self.stereo_spread = (self.stereo_spread + 5).min(100),
-            4 => self.scale_index = (self.scale_index + 1) % SCALE_NAMES.len(),
-            5 => self.bank_index = (self.bank_index + 1) % BANK_NAMES.len(),
-            6 => self.volume = (self.volume + 10).min(100),
-            7 => self.oscillators_active = !self.oscillators_active,
-            8 => self.granular_wavs = (self.granular_wavs + 1).min(64),
+            0 => self.oscillators_active = !self.oscillators_active,
+            1 => self.granular_active = !self.granular_active,
+            2 => self.key_index = (self.key_index + 1) % KEY_NAMES.len(),
+            3 => self.scale_index = (self.scale_index + 1) % SCALE_NAMES.len(),
+            4 => self.octave = (self.octave + 1).min(8),
+            5 => self.stereo_spread = (self.stereo_spread + 5).min(100),
+            6 => self.bank_index = (self.bank_index + 1) % BANK_NAMES.len(),
+            7 => self.wt_volume = (self.wt_volume + 10).min(100),
+            8 => self.gr_volume = (self.gr_volume + 10).min(100),
+            9 => self.fine_tune_cents = (self.fine_tune_cents + 1.0).min(100.0),
+            10 => self.osc_count = (self.osc_count + 1).min(64),
+            11 => self.gr_voices = (self.gr_voices + 1).min(64),
             _ => {}
         }
     }
 
     fn decrement_selected_value(&mut self) {
         match self.selected_item {
-            0 => {
+            0 => self.oscillators_active = !self.oscillators_active,
+            1 => self.granular_active = !self.granular_active,
+            2 => {
                 if self.key_index == 0 {
                     self.key_index = KEY_NAMES.len() - 1;
                 } else {
                     self.key_index -= 1;
                 }
             }
-            1 => self.octave = (self.octave - 1).max(0),
-            2 => self.fine_tune_cents = (self.fine_tune_cents - 1.0).max(-100.0),
-            3 => self.stereo_spread = self.stereo_spread.saturating_sub(5),
-            4 => {
+            3 => {
                 if self.scale_index == 0 {
                     self.scale_index = SCALE_NAMES.len() - 1;
                 } else {
                     self.scale_index -= 1;
                 }
             }
-            5 => {
+            4 => self.octave = (self.octave - 1).max(0),
+            5 => self.stereo_spread = self.stereo_spread.saturating_sub(5),
+            6 => {
                 if self.bank_index == 0 {
                     self.bank_index = BANK_NAMES.len() - 1;
                 } else {
                     self.bank_index -= 1;
                 }
             }
-            6 => self.volume = self.volume.saturating_sub(10),
-            7 => self.oscillators_active = !self.oscillators_active,
-            8 => self.granular_wavs = self.granular_wavs.saturating_sub(1),
+            7 => self.wt_volume = self.wt_volume.saturating_sub(10),
+            8 => self.gr_volume = self.gr_volume.saturating_sub(10),
+            9 => self.fine_tune_cents = (self.fine_tune_cents - 1.0).max(-100.0),
+            10 => self.osc_count = (self.osc_count - 1).max(1),
+            11 => self.gr_voices = self.gr_voices.saturating_sub(1),
             _ => {}
         }
     }
 
     pub fn lines(&self) -> Vec<String> {
         vec![
+            format!("WAVETABLE: {}", if self.oscillators_active { "ON" } else { "OFF" }),
+            format!("GRANULAR: {}", if self.granular_active { "ON" } else { "OFF" }),
             format!("KEY: {}", self.key_name()),
-            format!("OCT: {}", self.octave),
-            format!("CENTS: {:+}", self.fine_tune_cents as i32),
-            format!("SPREAD: {}", self.stereo_spread),
             format!("SCALE: {}", SCALE_NAMES[self.scale_index]),
-            format!("BANK: {}", BANK_NAMES[self.bank_index]),
-            format!("VOL: {}", self.volume),
-            format!("OSCS: {}", if self.oscillators_active { "ON" } else { "OFF" }),
-            format!("GRAN WAVS: {}", self.granular_wavs),
+            format!("OCTAVE: {}", self.octave),
+            format!("STEREO: {}", self.stereo_spread),
+            format!("WT BANK: {}", BANK_NAMES[self.bank_index]),
+            format!("WT VOL: {}", self.wt_volume),
+            format!("GR VOL: {}", self.gr_volume),
+            format!("CENTS: {:+}", self.fine_tune_cents as i32),
+            format!("WT OSCS: {}", self.osc_count),
+            format!("GR VOICES: {}", self.gr_voices),
         ]
     }
 }
@@ -468,54 +483,133 @@ mod tests {
 
     #[test]
     fn menu_navigation_wraps() {
-        let mut menu = MenuState::new(2, 0.0, 8);
+        let mut menu = MenuState::new(0.0, 8, 8);
         menu.apply_button(Button::Up);
         assert_eq!(menu.selected_item, menu.total_items() - 1);
     }
 
     #[test]
-    fn menu_has_nine_items() {
-        let menu = MenuState::new(2, 0.0, 8);
-        assert_eq!(menu.total_items(), 9);
-        assert_eq!(menu.lines().len(), 9);
+    fn menu_has_twelve_items() {
+        let menu = MenuState::new(0.0, 8, 8);
+        assert_eq!(menu.total_items(), 12);
+        assert_eq!(menu.lines().len(), 12);
     }
 
     #[test]
     fn menu_scroll_offset_initialized_to_zero() {
-        let menu = MenuState::new(2, 0.0, 8);
+        let menu = MenuState::new(0.0, 8, 8);
         assert_eq!(menu.scroll_offset, 0);
     }
 
     #[test]
-    fn menu_scroll_stays_zero_with_four_items() {
-        let mut menu = MenuState::new(2, 0.0, 8);
-        for _ in 0..20 {
+    fn menu_scroll_shifts_beyond_eleven_rows() {
+        // 12 items with 11 visible rows; scrolling past item 10 should increase scroll_offset
+        let mut menu = MenuState::new(0.0, 8, 8);
+        for _ in 0..11 {
             menu.apply_button(Button::Down);
         }
-        assert_eq!(menu.scroll_offset, 0);
+        assert_eq!(menu.selected_item, 11);
+        assert!(menu.scroll_offset > 0, "scroll_offset should shift when selected item exceeds visible window");
     }
 
     #[test]
-    fn menu_lines_contains_key_oct_cents_spread() {
-        let mut menu = MenuState::new(2, 0.0, 9);
-        menu.key_index = 0;
-        menu.octave = 3;
-        menu.fine_tune_cents = 5.5;
-        menu.stereo_spread = 25;
+    fn menu_default_values_match_spec() {
+        let menu = MenuState::new(0.0, 8, 8);
+        assert_eq!(menu.key_index, 9);           // A
+        assert_eq!(menu.octave, 1);
+        assert_eq!(menu.scale_index, 7);         // HIRAJOSHI
+        assert_eq!(menu.stereo_spread, 100);
+        assert_eq!(menu.wt_volume, 50);
+        assert_eq!(menu.gr_volume, 50);
+        assert_eq!(menu.oscillators_active, false);
+        assert_eq!(menu.granular_active, false);
+        assert_eq!(menu.fine_tune_cents, 0.0);
+    }
+
+    #[test]
+    fn menu_lines_correct_labels() {
+        let menu = MenuState::new(0.0, 8, 8);
         let lines = menu.lines();
-        assert_eq!(lines[0], "KEY: C");
-        assert_eq!(lines[1], "OCT: 3");
-        assert_eq!(lines[2], "CENTS: +5");
-        assert_eq!(lines[3], "SPREAD: 25");
-        assert_eq!(lines[8], "GRAN WAVS: 9");
+        assert!(lines[0].starts_with("WAVETABLE:"), "line 0 should start with WAVETABLE:");
+        assert!(lines[1].starts_with("GRANULAR:"), "line 1 should start with GRANULAR:");
+        assert!(lines[2].starts_with("KEY:"), "line 2 should start with KEY:");
+        assert!(lines[3].starts_with("SCALE:"), "line 3 should start with SCALE:");
+        assert!(lines[4].starts_with("OCTAVE:"), "line 4 should start with OCTAVE:");
+        assert!(lines[5].starts_with("STEREO:"), "line 5 should start with STEREO:");
+        assert!(lines[6].starts_with("WT BANK:"), "line 6 should start with WT BANK:");
+        assert!(lines[7].starts_with("WT VOL:"), "line 7 should start with WT VOL:");
+        assert!(lines[8].starts_with("GR VOL:"), "line 8 should start with GR VOL:");
+        assert!(lines[9].starts_with("CENTS:"), "line 9 should start with CENTS:");
+        assert!(lines[10].starts_with("WT OSCS:"), "line 10 should start with WT OSCS:");
+        assert!(lines[11].starts_with("GR VOICES:"), "line 11 should start with GR VOICES:");
     }
 
     #[test]
-    fn granular_wavs_menu_item_allows_zero() {
-        let mut menu = MenuState::new(2, 0.0, 1);
-        menu.selected_item = 8;
+    fn granular_toggle_activates() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        assert_eq!(menu.granular_active, false);
+        menu.selected_item = 1;
+        menu.apply_button(Button::Select);
+        assert_eq!(menu.granular_active, true);
+        menu.apply_button(Button::Select);
+        assert_eq!(menu.granular_active, false);
+    }
+
+    #[test]
+    fn wavetable_toggle_activates() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        assert_eq!(menu.oscillators_active, false);
+        menu.selected_item = 0;
+        menu.apply_button(Button::Select);
+        assert_eq!(menu.oscillators_active, true);
         menu.apply_button(Button::Back);
-        assert_eq!(menu.granular_wavs, 0);
+        assert_eq!(menu.oscillators_active, false);
+    }
+
+    #[test]
+    fn wt_volume_increments_by_ten() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        assert_eq!(menu.wt_volume, 50);
+        menu.selected_item = 7;
+        menu.apply_button(Button::Select);
+        assert_eq!(menu.wt_volume, 60);
+        menu.apply_button(Button::Back);
+        assert_eq!(menu.wt_volume, 50);
+    }
+
+    #[test]
+    fn gr_volume_increments_by_ten() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        assert_eq!(menu.gr_volume, 50);
+        menu.selected_item = 8;
+        menu.apply_button(Button::Select);
+        assert_eq!(menu.gr_volume, 60);
+        menu.apply_button(Button::Back);
+        assert_eq!(menu.gr_volume, 50);
+    }
+
+    #[test]
+    fn osc_count_increments_by_one_clamped() {
+        let mut menu = MenuState::new(0.0, 64, 8);
+        menu.selected_item = 10;
+        menu.apply_button(Button::Select);
+        assert_eq!(menu.osc_count, 64, "osc_count should clamp at 64");
+        let mut menu2 = MenuState::new(0.0, 1, 8);
+        menu2.selected_item = 10;
+        menu2.apply_button(Button::Back);
+        assert_eq!(menu2.osc_count, 1, "osc_count should clamp at minimum 1");
+    }
+
+    #[test]
+    fn gr_voices_increments_by_one_clamped() {
+        let mut menu = MenuState::new(0.0, 8, 64);
+        menu.selected_item = 11;
+        menu.apply_button(Button::Select);
+        assert_eq!(menu.gr_voices, 64, "gr_voices should clamp at 64");
+        let mut menu2 = MenuState::new(0.0, 8, 0);
+        menu2.selected_item = 11;
+        menu2.apply_button(Button::Back);
+        assert_eq!(menu2.gr_voices, 0, "gr_voices should allow zero");
     }
 
     #[test]

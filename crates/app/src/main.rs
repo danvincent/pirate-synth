@@ -28,7 +28,7 @@ struct AppConfig {
     root_octave: i32,
     #[serde(default)]
     fine_tune_cents: f32,
-    #[serde(default)]
+    #[serde(default = "default_stereo_spread")]
     stereo_spread: u8,
     #[serde(default = "default_wavetable_dir")]
     wavetable_dir: PathBuf,
@@ -71,7 +71,7 @@ struct AppConfig {
     #[serde(default = "default_subtractive_depth")]
     subtractive_depth: f32,
     // Scale
-    #[serde(default)]
+    #[serde(default = "default_scale_index")]
     scale_index: usize,
     // Wavetable bank (0=A, 1=B, 2=C)
     #[serde(default)]
@@ -106,6 +106,10 @@ struct AppConfig {
     granular_spawn_jitter: f32,
     #[serde(default = "default_granular_wavs")]
     granular_wavs: usize,
+    #[serde(default = "default_granular_volume")]
+    pub granular_volume: u8,
+    #[serde(default = "default_granular_active")]
+    pub granular_active: bool,
 }
 
 fn default_sample_rate() -> u32 {
@@ -118,10 +122,10 @@ fn default_oscillators() -> usize {
     8
 }
 fn default_root_key() -> String {
-    "C".into()
+    "A".into()
 }
 fn default_root_octave() -> i32 {
-    2
+    1
 }
 fn default_wavetable_dir() -> PathBuf {
     PathBuf::from("/var/lib/pirate-synth/wavetables")
@@ -169,6 +173,12 @@ fn default_fm_depth() -> f32 {
 fn default_subtractive_depth() -> f32 {
     0.30
 }
+fn default_scale_index() -> usize {
+    7
+}
+fn default_stereo_spread() -> u8 {
+    100
+}
 fn default_oscillators_active() -> bool {
     false
 }
@@ -176,7 +186,7 @@ fn default_transition_secs() -> f32 {
     3.0
 }
 fn default_volume() -> u8 {
-    100
+    50
 }
 fn default_granular_grain_size_ms() -> f32 {
     120.0
@@ -208,6 +218,12 @@ fn default_granular_spawn_jitter() -> f32 {
 fn default_granular_wavs() -> usize {
     default_oscillators()
 }
+fn default_granular_volume() -> u8 {
+    50
+}
+fn default_granular_active() -> bool {
+    false
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -218,7 +234,7 @@ impl Default for AppConfig {
             root_key: default_root_key(),
             root_octave: default_root_octave(),
             fine_tune_cents: 0.0,
-            stereo_spread: 0,
+            stereo_spread: default_stereo_spread(),
             wavetable_dir: default_wavetable_dir(),
             wav_dir: default_wav_dir(),
             spi_device: default_spi_device(),
@@ -236,7 +252,7 @@ impl Default for AppConfig {
             fm_depth: default_fm_depth(),
             subtractive_enabled: false,
             subtractive_depth: default_subtractive_depth(),
-            scale_index: 0,
+            scale_index: default_scale_index(),
             bank_index: 0,
             volume: default_volume(),
             transition_secs: default_transition_secs(),
@@ -251,6 +267,8 @@ impl Default for AppConfig {
             granular_note_ms: default_granular_note_ms(),
             granular_spawn_jitter: default_granular_spawn_jitter(),
             granular_wavs: default_granular_wavs(),
+            granular_volume: default_granular_volume(),
+            granular_active: default_granular_active(),
         }
     }
 }
@@ -314,6 +332,8 @@ struct UserConfig {
     granular_note_ms: Option<f32>,
     granular_spawn_jitter: Option<f32>,
     granular_wavs: Option<usize>,
+    granular_volume: Option<u8>,
+    granular_active: Option<bool>,
 }
 
 fn user_config_path() -> Option<PathBuf> {
@@ -383,6 +403,8 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         granular_note_ms: user.granular_note_ms.unwrap_or(base.granular_note_ms),
         granular_spawn_jitter: user.granular_spawn_jitter.unwrap_or(base.granular_spawn_jitter),
         granular_wavs: user.granular_wavs.unwrap_or(base.granular_wavs),
+        granular_volume: user.granular_volume.unwrap_or(base.granular_volume),
+        granular_active: user.granular_active.unwrap_or(base.granular_active),
     }
 }
 
@@ -415,7 +437,8 @@ fn apply_engine_params(engine: &mut Engine, menu: &MenuState, config: &AppConfig
     engine.set_fm(config.fm_enabled, config.fm_depth);
     engine.set_subtractive(config.subtractive_enabled, config.subtractive_depth);
     engine.set_granular_config(granular_config(config));
-    engine.set_granular_wavs(menu.granular_wavs);
+    engine.set_granular_wavs(menu.gr_voices);
+    engine.set_granular_volume(config.granular_volume);
 }
 
 fn initialize_engine(config: &AppConfig, bank_name: &str) -> Result<Engine> {
@@ -525,19 +548,22 @@ fn main() -> Result<()> {
         .copied()
         .unwrap_or("A");
     let mut menu = MenuState::new(
-        config.root_octave,
         config.fine_tune_cents,
+        config.oscillators,
         config.granular_wavs,
     );
     menu.key_index = ui::KEY_NAMES
         .iter()
         .position(|k| *k == config.root_key)
-        .unwrap_or(0);
+        .unwrap_or(9);
+    menu.octave = config.root_octave;
     menu.stereo_spread = config.stereo_spread;
     menu.scale_index = config.scale_index.min(ui::SCALE_NAMES.len() - 1);
     menu.bank_index = config.bank_index.min(ui::BANK_NAMES.len() - 1);
-    menu.volume = config.volume.min(100);
+    menu.wt_volume = config.volume.min(100);
+    menu.gr_volume = config.granular_volume;
     menu.oscillators_active = config.oscillators_active;
+    menu.granular_active = config.granular_active;
     if menu.key_name() != config.root_key {
         warn!(
             "unknown root_key '{}' in config, falling back to '{}'",
@@ -561,8 +587,10 @@ fn main() -> Result<()> {
     apply_engine_params(&mut engine, &menu, &config);
     engine.set_scale(scale_mode_from_index(config.scale_index), config.fine_tune_cents);
     engine.set_transition_secs(config.transition_secs);
-    engine.set_volume(config.volume);
+    engine.set_wavetable_volume(config.volume);
     engine.set_oscillators_active_immediate(config.oscillators_active);
+    engine.set_granular_volume(config.granular_volume);
+    engine.set_granular_active_immediate(config.granular_active);
     info!("initial frequency set to {:.2} Hz", initial_hz);
 
     let (audio_tx, audio_rx) = command_channel();
@@ -603,9 +631,12 @@ fn main() -> Result<()> {
             let old_spread = menu.stereo_spread;
             let old_scale = menu.scale_index;
             let old_bank = menu.bank_index;
-            let old_volume = menu.volume;
+            let old_wt_volume = menu.wt_volume;
+            let old_gr_volume = menu.gr_volume;
             let old_oscs = menu.oscillators_active;
-            let old_granular_wavs = menu.granular_wavs;
+            let old_granular_active = menu.granular_active;
+            let old_osc_count = menu.osc_count;
+            let old_gr_voices = menu.gr_voices;
 
             menu.apply_button(button);
             display.draw_menu(&menu)?;
@@ -637,9 +668,15 @@ fn main() -> Result<()> {
                 pending_bank = Some((menu.bank_index, Instant::now()));
             }
 
-            if menu.volume != old_volume {
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetVolume(menu.volume)) {
+            if menu.wt_volume != old_wt_volume {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetWavetableVolume(menu.wt_volume)) {
                     warn!("failed to send volume to audio thread: {err}");
+                }
+            }
+
+            if menu.gr_volume != old_gr_volume {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetGranularVolume(menu.gr_volume)) {
+                    warn!("failed to send granular volume: {err}");
                 }
             }
 
@@ -649,11 +686,21 @@ fn main() -> Result<()> {
                 }
             }
 
-            if menu.granular_wavs != old_granular_wavs {
-                if let Err(err) =
-                    audio_tx.try_send(AudioCommand::SetGranularWavs(menu.granular_wavs))
-                {
-                    warn!("failed to send granular wav count to audio thread: {err}");
+            if menu.granular_active != old_granular_active {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetGranularActive(menu.granular_active)) {
+                    warn!("failed to send granular active: {err}");
+                }
+            }
+
+            if menu.osc_count != old_osc_count {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetOscillatorCount(menu.osc_count)) {
+                    warn!("failed to send oscillator count: {err}");
+                }
+            }
+
+            if menu.gr_voices != old_gr_voices {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetGranularVoices(menu.gr_voices)) {
+                    warn!("failed to send granular voices: {err}");
                 }
             }
         }
@@ -730,7 +777,13 @@ mod tests {
         let config = load_config(&path).unwrap();
         assert_eq!(config.sample_rate, 48_000);
         assert_eq!(config.oscillators, 8);
-        assert_eq!(config.root_key, "C");
+        assert_eq!(config.root_key, "A");
+        assert_eq!(config.root_octave, 1);
+        assert_eq!(config.stereo_spread, 100);
+        assert_eq!(config.scale_index, 7);
+        assert_eq!(config.volume, 50);
+        assert_eq!(config.granular_volume, 50);
+        assert_eq!(config.granular_active, false);
         assert_eq!(config.wav_dir, PathBuf::from("/var/lib/pirate-synth/WAV"));
         assert_eq!(config.granular_max_overlap, 16);
         assert_eq!(config.granular_wavs, 8);
