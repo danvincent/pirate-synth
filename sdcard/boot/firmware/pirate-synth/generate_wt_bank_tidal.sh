@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # generate_wt_bank_tidal.sh — NOAA tidal gauge water level wavetables
 # Fetches 24h of water level readings from three US coastal stations.
-# Outputs one .wt file per station.
+# Outputs one .txt file per station.
 #
 # Usage: ./generate_wt_bank_tidal.sh [OUTPUT_DIR]
 # Requires: curl, python3
@@ -13,7 +13,7 @@ mkdir -p "$OUT_DIR"
 
 normalise_and_write() {
   local name="$1"
-  OUT_PATH="$OUT_DIR/$name.wt" python3 -c "
+  OUT_PATH="$OUT_DIR/$name.txt" python3 -c "
 import sys, os
 out_path = os.environ['OUT_PATH']
 vals = []

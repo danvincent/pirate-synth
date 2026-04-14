@@ -35,9 +35,9 @@ write_table() {
         print clamp(v)
       }
     }
-  ' > "$OUT_DIR/$name.wt"
+  ' > "$OUT_DIR/$name.txt"
 
-  echo "wrote $OUT_DIR/$name.wt ($size samples)"
+  echo "wrote $OUT_DIR/$name.txt ($size samples)"
 }
 
 # A few deterministic shapes with random sizes
@@ -128,7 +128,7 @@ for idx in $(seq 1 "$COUNT_RANDOM"); do
         print clamp(v)
       }
     }
-  ' > "$OUT_DIR/complex_$(printf '%02d' "$idx")_${size}.wt"
+  ' > "$OUT_DIR/complex_$(printf '%02d' "$idx")_${size}.txt"
 
-  echo "wrote $OUT_DIR/complex_$(printf '%02d' "$idx")_${size}.wt ($size samples)"
+  echo "wrote $OUT_DIR/complex_$(printf '%02d' "$idx")_${size}.txt ($size samples)"
 done

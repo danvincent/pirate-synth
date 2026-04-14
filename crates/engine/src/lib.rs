@@ -1486,7 +1486,7 @@ fn load_wavetable_file(path: &Path) -> Result<Option<Wavetable>> {
         return Ok(None);
     };
 
-    if !matches!(ext, "wt" | "txt" | "csv") {
+    if !matches!(ext, "txt" | "csv") {
         return Ok(None);
     }
 
@@ -1893,6 +1893,26 @@ mod tests {
         assert_eq!(result.len(), 8);
         let names: std::collections::HashSet<_> = result.iter().map(|w| w.name.as_str()).collect();
         assert_eq!(names.len(), 8);
+    }
+
+    #[test]
+    fn load_wavetables_ignores_wt_extension_and_loads_txt() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("pirate_synth_test_wt_vs_txt_{unique}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(dir.join("legacy.wt"), "0.0 0.5 -0.5").unwrap();
+        std::fs::write(dir.join("current.txt"), "0.0 1.0 -1.0").unwrap();
+
+        let result = load_wavetables(&dir, 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "current");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

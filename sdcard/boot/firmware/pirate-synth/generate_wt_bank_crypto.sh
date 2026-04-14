@@ -13,7 +13,7 @@ mkdir -p "$OUT_DIR"
 
 normalise_and_write() {
   local name="$1"
-  OUT_PATH="$OUT_DIR/$name.wt" python3 -c "
+  OUT_PATH="$OUT_DIR/$name.txt" python3 -c "
 import sys, os
 out_path = os.environ['OUT_PATH']
 vals = []
