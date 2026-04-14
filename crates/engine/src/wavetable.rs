@@ -7,13 +7,12 @@ use anyhow::{Context, Result};
 use crate::types::Wavetable;
 
 pub(crate) fn lerp_table(table: &[f32], phase: f32) -> f32 {
+    debug_assert!((0.0..1.0).contains(&phase));
     let len = table.len() as f32;
-    let phase = phase.rem_euclid(1.0);
     let pos = phase * len;
-    let i0_f = pos.floor();
-    let i0 = i0_f as usize % table.len();
+    let i0 = pos as usize;
     let i1 = (i0 + 1) % table.len();
-    let frac = pos - i0_f;
+    let frac = pos - i0 as f32;
     table[i0] * (1.0 - frac) + table[i1] * frac
 }
 
