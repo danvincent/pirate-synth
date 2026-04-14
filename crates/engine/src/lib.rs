@@ -1,84 +1,34 @@
-use std::f32::consts::PI;
-use std::fs;
-use std::path::{Path, PathBuf};
+mod granular;
+mod reverb;
+mod types;
+mod wav;
+mod wavetable;
+
+// Public API re-exports
+pub use types::{EngineError, GranularConfig, GranularSource, ScaleMode, SourceKind, Wavetable};
+pub use wav::load_wav_sources;
+pub use wavetable::{builtin_wavetables, default_sine_wavetable, load_wavetables};
+
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
-use thiserror::Error;
+use anyhow::Result;
 
-const C2_FREQUENCY_HZ: f32 = 65.406_39;
+use granular::{grain_envelope, sample_linear, spawn_grain, GranularState};
+use reverb::Reverb;
+use wavetable::sample_from_banks;
 
-#[derive(Debug, Error)]
-pub enum EngineError {
-    #[error("wavetable must have at least 2 samples")]
-    EmptyWavetable,
-    #[error("granular source must have at least 2 samples")]
-    EmptyGranularSource,
-    #[error("oscillator count must be >= 1")]
-    InvalidOscillatorCount,
-}
+pub(crate) const C2_FREQUENCY_HZ: f32 = 65.406_39;
 
 #[derive(Clone, Debug)]
-pub struct Wavetable {
-    pub name: String,
-    pub samples: Vec<f32>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SourceKind {
-    Wavetable,
-    Wav,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct GranularConfig {
-    pub grain_size_ms: f32,
-    /// Total note duration in ms; grain loops its WAV window for this long before expiring.
-    /// Use grain_size_ms as the looped window; grain_note_ms as overall lifespan.
-    pub grain_note_ms: f32,
-    /// Spawn interval jitter: ±this fraction of spawn interval is added randomly each spawn.
-    pub spawn_jitter: f32,
-    pub grain_density_hz: f32,
-    pub max_overlapping_grains: usize,
-    pub position: f32,
-    pub position_jitter: f32,
-    pub envelope_attack_ms: f32,
-    pub envelope_release_ms: f32,
-}
-
-impl Default for GranularConfig {
-    fn default() -> Self {
-        Self {
-            grain_size_ms: 250.0,
-            grain_note_ms: 4000.0,
-            spawn_jitter: 0.5,
-            grain_density_hz: 4.0,
-            max_overlapping_grains: 16,
-            position: 0.5,
-            position_jitter: 0.15,
-            envelope_attack_ms: 500.0,
-            envelope_release_ms: 500.0,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct GranularSource {
-    pub name: String,
-    pub sample_rate: u32,
-    pub samples: Vec<f32>,
-}
-
-#[derive(Clone, Debug)]
-struct Voice {
-    gain: f32,
-    target_gain: f32,
-    pan_l: f32,
-    pan_r: f32,
+pub(crate) struct Voice {
+    pub(crate) gain: f32,
+    pub(crate) target_gain: f32,
+    pub(crate) pan_l: f32,
+    pub(crate) pan_r: f32,
 }
 
 impl Voice {
-    fn new(pan_l: f32, pan_r: f32) -> Self {
+    pub(crate) fn new(pan_l: f32, pan_r: f32) -> Self {
         Voice {
             gain: 1.0,
             target_gain: 1.0,
@@ -96,76 +46,6 @@ impl Voice {
     }
 }
 
-#[derive(Clone, Debug)]
-struct ActiveGrain {
-    source_index: usize,
-    start_sample: f32,
-    sample_offset: f32,
-    playback_ratio: f32,
-    sample_length: usize,
-    window_source_samples: usize,
-    age_samples: usize,
-    attack_samples: usize,
-    release_samples: usize,
-    voice: Voice,
-    rng_state: u64,
-}
-
-#[derive(Clone, Debug)]
-struct GranularState {
-    sources: Vec<GranularSource>,
-    source_voices: Vec<Voice>,
-    config: GranularConfig,
-    samples_until_next_grain: f32,
-    active_grains: Vec<ActiveGrain>,
-    source_offset: usize,
-    configured_wavs: usize,
-    round_robin_counter: usize,
-    rng_state: u64,
-    initialized: bool,
-}
-
-impl GranularState {
-    fn new(sources: Vec<GranularSource>, config: GranularConfig) -> Self {
-        let configured_wavs = sources.len();
-        // Seed rng from source sample counts so each load has a unique phase.
-        let rng_state = sources.iter().fold(0xdeadbeef_cafebabe_u64, |acc, s| {
-            acc.wrapping_add(s.samples.len() as u64)
-               .wrapping_mul(6364136223846793005_u64)
-        });
-        
-        // Initialize source_voices with stereo panning (0 = full left, 1 = full right)
-        let source_voices = sources
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
-                let n = sources.len();
-                let pan_pos = if n <= 1 {
-                    0.0f32
-                } else {
-                    -1.0 + 2.0 * i as f32 / (n - 1) as f32
-                };
-                let angle = (pan_pos + 1.0) * std::f32::consts::FRAC_PI_4;
-                Voice::new(angle.cos(), angle.sin())
-            })
-            .collect();
-        
-        Self {
-            sources,
-            source_voices,
-            config,
-            samples_until_next_grain: 0.0,
-            active_grains: Vec::new(),
-            source_offset: 0,
-            configured_wavs,
-            round_robin_counter: 0,
-            rng_state,
-            initialized: false,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
 struct Oscillator {
     phase: f32,
     detune_ratio: f32,
@@ -185,88 +65,14 @@ struct Oscillator {
     detune_ramp_rate: f32,
 }
 
-struct CombFilter {
-    buffer: Vec<f32>,
-    pos: usize,
-    feedback: f32,
-    damp: f32,
-    damp_state: f32,
+
+pub(crate) fn lcg_next(state: &mut u64) -> u32 {
+    *state = state
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    ((*state >> 33) ^ (*state >> 17)) as u32
 }
 
-impl CombFilter {
-    fn new(delay_samples: usize, feedback: f32, damp: f32) -> Self {
-        Self {
-            buffer: vec![0.0; delay_samples],
-            pos: 0,
-            feedback,
-            damp,
-            damp_state: 0.0,
-        }
-    }
-
-    fn process(&mut self, input: f32) -> f32 {
-        let out = self.buffer[self.pos];
-        self.damp_state = out * (1.0 - self.damp) + self.damp_state * self.damp;
-        self.buffer[self.pos] = input + self.damp_state * self.feedback;
-        self.pos = (self.pos + 1) % self.buffer.len();
-        out
-    }
-}
-
-struct AllpassFilter {
-    buffer: Vec<f32>,
-    pos: usize,
-}
-
-impl AllpassFilter {
-    fn new(delay_samples: usize) -> Self {
-        Self {
-            buffer: vec![0.0; delay_samples],
-            pos: 0,
-        }
-    }
-
-    fn process(&mut self, input: f32) -> f32 {
-        let buf = self.buffer[self.pos];
-        let out = -input + buf;
-        self.buffer[self.pos] = input + buf * 0.5;
-        self.pos = (self.pos + 1) % self.buffer.len();
-        out
-    }
-}
-
-struct Reverb {
-    combs: [CombFilter; 4],
-    allpasses: [AllpassFilter; 2],
-}
-
-impl Reverb {
-    /// short = true → short room (odd bus); short = false → long room (even bus)
-    fn new(short: bool) -> Self {
-        let scale = if short { 1.0f32 } else { 1.25f32 };
-        let feedback = 0.84f32;
-        let damp = 0.20f32;
-        // Base comb delays (samples at 48kHz)
-        let delays = [1116usize, 1188, 1277, 1356];
-        let combs = [
-            CombFilter::new((delays[0] as f32 * scale) as usize, feedback, damp),
-            CombFilter::new((delays[1] as f32 * scale) as usize, feedback, damp),
-            CombFilter::new((delays[2] as f32 * scale) as usize, feedback, damp),
-            CombFilter::new((delays[3] as f32 * scale) as usize, feedback, damp),
-        ];
-        let allpasses = [AllpassFilter::new(556), AllpassFilter::new(441)];
-        Self { combs, allpasses }
-    }
-
-    fn process(&mut self, input: f32) -> f32 {
-        let comb_sum = self.combs[0].process(input)
-            + self.combs[1].process(input)
-            + self.combs[2].process(input)
-            + self.combs[3].process(input);
-        let ap1 = self.allpasses[0].process(comb_sum);
-        self.allpasses[1].process(ap1)
-    }
-}
 
 pub struct Engine {
     sample_rate: u32,
@@ -331,84 +137,6 @@ pub struct Engine {
     granular: Option<GranularState>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ScaleMode {
-    None,
-    Major,
-    NaturalMinor,
-    Pentatonic,
-    Dorian,
-    Mixolydian,
-    WholeTone,
-    Hirajoshi,
-    Lydian,
-}
-
-impl ScaleMode {
-    /// Semitone offsets from root (within one octave)
-    pub fn semitones(&self) -> &'static [i32] {
-        match self {
-            ScaleMode::None => &[],
-            ScaleMode::Major => &[0, 2, 4, 5, 7, 9, 11],
-            ScaleMode::NaturalMinor => &[0, 2, 3, 5, 7, 8, 10],
-            ScaleMode::Pentatonic => &[0, 2, 4, 7, 9],
-            ScaleMode::Dorian => &[0, 2, 3, 5, 7, 9, 10],
-            ScaleMode::Mixolydian => &[0, 2, 4, 5, 7, 9, 10],
-            ScaleMode::WholeTone => &[0, 2, 4, 6, 8, 10],
-            ScaleMode::Hirajoshi => &[0, 2, 3, 7, 8],
-            ScaleMode::Lydian => &[0, 2, 4, 6, 7, 9, 11],
-        }
-    }
-}
-
-fn lcg_next(state: &mut u64) -> u32 {
-    *state = state
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(1442695040888963407);
-    ((*state >> 33) ^ (*state >> 17)) as u32
-}
-
-fn lerp_table(table: &[f32], phase: f32) -> f32 {
-    let len = table.len() as f32;
-    let pos = phase * len;
-    let i0 = pos as usize % table.len();
-    let i1 = (i0 + 1) % table.len();
-    let frac = pos - i0 as f32;
-    table[i0] * (1.0 - frac) + table[i1] * frac
-}
-
-fn read_from_bank(tables: &[Wavetable], cur_idx: usize, next_idx: usize, phase: f32, xfade_t: f32, crossfade_enabled: bool) -> f32 {
-    let s_cur = lerp_table(&tables[cur_idx].samples, phase);
-    if crossfade_enabled && xfade_t > 0.0 {
-        let s_next = lerp_table(&tables[next_idx].samples, phase);
-        s_cur * (1.0 - xfade_t) + s_next * xfade_t
-    } else {
-        s_cur
-    }
-}
-
-fn sample_from_banks(
-    current: &[Wavetable],
-    pending: &[Wavetable],
-    bank_blend: f32,
-    cur_idx: usize,
-    next_idx: usize,
-    phase: f32,
-    xfade_t: f32,
-    crossfade_enabled: bool,
-) -> f32 {
-    let s = read_from_bank(current, cur_idx, next_idx, phase, xfade_t, crossfade_enabled);
-    if bank_blend > 0.0 && !pending.is_empty() {
-        let p_len = pending.len();
-        let p_cur = cur_idx % p_len;
-        let p_next = (p_cur + 1) % p_len;
-        // Use phase-aligned blend: same oscillator phase, both read at comparable position
-        let s_p = read_from_bank(pending, p_cur, p_next, phase, xfade_t, crossfade_enabled);
-        s * (1.0 - bank_blend) + s_p * bank_blend
-    } else {
-        s
-    }
-}
 
 impl Engine {
     pub fn new(
@@ -928,7 +656,7 @@ impl Engine {
                         }
                     }
                 }
-                osc.phase = new_phase.fract();
+                osc.phase = new_phase.rem_euclid(1.0);
 
                 // Smoothly ramp detune_ratio toward target
                 if osc.detune_ramp_rate > 0.0 {
@@ -1187,461 +915,11 @@ fn key_to_semitone(key: &str) -> Result<u8> {
     Ok(value)
 }
 
-fn spawn_grain(
-    granular: &mut GranularState,
-    oscillators: &mut [Oscillator],
-    output_sample_rate: f32,
-    base_frequency_hz: f32,
-    fine_tune_cents: f32,
-) {
-    if granular.sources.is_empty() || oscillators.is_empty() {
-        return;
-    }
-    if granular.configured_wavs == 0 {
-        return;
-    }
-    if granular.active_grains.len() >= granular.config.max_overlapping_grains.max(1) {
-        return;
-    }
-
-    let osc_idx = granular.round_robin_counter % oscillators.len();
-    let lane = granular.round_robin_counter % granular.configured_wavs;
-    granular.round_robin_counter = granular.round_robin_counter.wrapping_add(1);
-    let source_index = (granular.source_offset + lane) % granular.sources.len();
-    let source = &granular.sources[source_index];
-    let source_len = source.samples.len();
-    if source_len < 2 {
-        return;
-    }
-
-    let osc = &mut oscillators[osc_idx];
-
-    // grain_size_ms is the WAV window size (texture chunk); grain_note_ms is the total
-    // note lifespan. If grain_note_ms is 0 or unset, fall back to grain_size_ms.
-    let note_ms = if granular.config.grain_note_ms > 0.0 {
-        granular.config.grain_note_ms
-    } else {
-        granular.config.grain_size_ms
-    };
-    let note_len_samples =
-        ((note_ms.max(1.0) / 1000.0) * output_sample_rate) as usize;
-    let note_len_samples = note_len_samples.max(8);
-
-    // Compute the source-space window this grain loops through.
-    let window_source_samples =
-        ((granular.config.grain_size_ms.max(1.0) / 1000.0) * source.sample_rate as f32) as usize;
-
-    let jitter = (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 2.0 - 1.0;
-    let grain_rng_state = osc.rng_state;
-    let position = (granular.config.position + jitter * granular.config.position_jitter.max(0.0))
-        .clamp(0.0, 1.0);
-
-    // Clamp window to what's actually available in the source from start_sample.
-    let max_start = source_len.saturating_sub(window_source_samples.max(2) + 1);
-    let start_sample = position * max_start as f32;
-    let avail = source_len.saturating_sub(start_sample as usize).saturating_sub(2);
-    let window_source_samples = window_source_samples.min(avail).max(1);
-
-    // Base C2 is used by the wavetable drone path, so we keep pitch relationships aligned.
-    let root_ratio = (base_frequency_hz / C2_FREQUENCY_HZ).max(0.01);
-    let fine_ratio = 2.0f32.powf(fine_tune_cents / 1200.0);
-    let playback_ratio = root_ratio
-        * fine_ratio
-        * osc.detune_ratio
-        * (source.sample_rate as f32 / output_sample_rate);
-
-    let attack =
-        ((granular.config.envelope_attack_ms.max(0.0) / 1000.0) * output_sample_rate) as usize;
-    let release =
-        ((granular.config.envelope_release_ms.max(0.0) / 1000.0) * output_sample_rate) as usize;
-
-    granular.active_grains.push(ActiveGrain {
-        source_index,
-        start_sample,
-        sample_offset: 0.0,
-        playback_ratio,
-        sample_length: note_len_samples,
-        window_source_samples,
-        age_samples: 0,
-        attack_samples: attack,
-        release_samples: release,
-        voice: Voice::new(granular.source_voices[source_index].pan_l, granular.source_voices[source_index].pan_r),
-        rng_state: grain_rng_state,
-    });
-}
-
-fn grain_envelope(grain: &ActiveGrain) -> f32 {
-    let attack = grain.attack_samples.max(1);
-    let release = grain.release_samples.max(1);
-    let age = grain.age_samples;
-    let remaining = grain.sample_length.saturating_sub(age);
-
-    if age < attack {
-        return age as f32 / attack as f32;
-    }
-    if remaining < release {
-        return remaining as f32 / release as f32;
-    }
-    1.0
-}
-
-fn sample_linear(samples: &[f32], pos: f32) -> f32 {
-    let i0 = pos.floor() as usize;
-    let i1 = (i0 + 1).min(samples.len().saturating_sub(1));
-    let frac = (pos - i0 as f32).clamp(0.0, 1.0);
-    samples[i0] * (1.0 - frac) + samples[i1] * frac
-}
-
-pub fn load_wav_sources(wav_dir: &Path) -> Result<Vec<GranularSource>> {
-    let mut files: Vec<PathBuf> = fs::read_dir(wav_dir)
-        .with_context(|| format!("failed to read WAV directory: {}", wav_dir.display()))?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
-        })
-        .collect();
-    files.sort();
-
-    let mut out = Vec::new();
-    for file in files {
-        if let Some(source) = load_wav_source_file(&file)? {
-            out.push(source);
-        }
-    }
-    Ok(out)
-}
-
-fn load_wav_source_file(path: &Path) -> Result<Option<GranularSource>> {
-    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-        return Ok(None);
-    };
-    let bytes = fs::read(path)
-        .with_context(|| format!("failed to read WAV source file: {}", path.display()))?;
-    let (sample_rate, channels, bits_per_sample, audio_format, data) = parse_wav_bytes(&bytes)
-        .with_context(|| format!("invalid WAV source file: {}", path.display()))?;
-
-    let samples = decode_wav_mono_f32(data, channels, bits_per_sample, audio_format)
-        .with_context(|| format!("unsupported WAV source format in {}", path.display()))?;
-    if samples.len() < 2 {
-        return Ok(None);
-    }
-
-    Ok(Some(GranularSource {
-        name: stem.to_string(),
-        sample_rate,
-        samples,
-    }))
-}
-
-fn parse_wav_bytes(bytes: &[u8]) -> Result<(u32, u16, u16, u16, &[u8])> {
-    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
-        anyhow::bail!("not a RIFF/WAVE file");
-    }
-
-    let mut cursor = 12usize;
-    let mut sample_rate = None;
-    let mut channels = None;
-    let mut bits_per_sample = None;
-    let mut audio_format = None;
-    let mut data = None;
-
-    while cursor + 8 <= bytes.len() {
-        let chunk_id = &bytes[cursor..cursor + 4];
-        let size = u32::from_le_bytes([
-            bytes[cursor + 4],
-            bytes[cursor + 5],
-            bytes[cursor + 6],
-            bytes[cursor + 7],
-        ]) as usize;
-        cursor += 8;
-        if cursor + size > bytes.len() {
-            break;
-        }
-        let chunk = &bytes[cursor..cursor + size];
-        if chunk_id == b"fmt " && size >= 16 {
-            audio_format = Some(u16::from_le_bytes([chunk[0], chunk[1]]));
-            channels = Some(u16::from_le_bytes([chunk[2], chunk[3]]));
-            sample_rate = Some(u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]));
-            bits_per_sample = Some(u16::from_le_bytes([chunk[14], chunk[15]]));
-        } else if chunk_id == b"data" {
-            data = Some(chunk);
-        }
-        cursor += size + (size % 2);
-    }
-
-    Ok((
-        sample_rate.context("missing fmt sample_rate")?,
-        channels.context("missing fmt channels")?,
-        bits_per_sample.context("missing fmt bits_per_sample")?,
-        audio_format.context("missing fmt audio_format")?,
-        data.context("missing data chunk")?,
-    ))
-}
-
-fn decode_wav_mono_f32(
-    data: &[u8],
-    channels: u16,
-    bits_per_sample: u16,
-    audio_format: u16,
-) -> Result<Vec<f32>> {
-    let channels = channels.max(1) as usize;
-    let frame_width_bytes = ((bits_per_sample as usize).saturating_mul(channels)) / 8;
-    if frame_width_bytes == 0 {
-        anyhow::bail!("invalid frame width");
-    }
-    let mut out = Vec::new();
-    for frame in data.chunks_exact(frame_width_bytes) {
-        let mut sum = 0.0f32;
-        for ch in 0..channels {
-            let offset = ch * (bits_per_sample as usize / 8);
-            let s = match (audio_format, bits_per_sample) {
-                (1, 16) => {
-                    let raw = i16::from_le_bytes([frame[offset], frame[offset + 1]]);
-                    raw as f32 / i16::MAX as f32
-                }
-                (3, 32) => f32::from_le_bytes([
-                    frame[offset],
-                    frame[offset + 1],
-                    frame[offset + 2],
-                    frame[offset + 3],
-                ]),
-                _ => anyhow::bail!("only PCM16 and float32 WAV sources are supported"),
-            };
-            sum += s;
-        }
-        out.push((sum / channels as f32).clamp(-1.0, 1.0));
-    }
-    Ok(out)
-}
-
-pub fn load_wavetables(wavetable_dir: &Path, min_count: usize) -> Result<Vec<Wavetable>> {
-    let mut files: Vec<PathBuf> = fs::read_dir(wavetable_dir)
-        .with_context(|| {
-            format!(
-                "failed to read wavetable directory: {}",
-                wavetable_dir.display()
-            )
-        })?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|path| path.is_file())
-        .collect();
-    files.sort();
-
-    let mut out = Vec::new();
-    for file in files {
-        if let Some(wavetable) = load_wavetable_file(&file)? {
-            out.push(wavetable);
-        }
-    }
-
-    if out.len() < min_count {
-        let builtins = builtin_wavetables();
-        // First pass: add unique built-ins by name
-        for builtin in &builtins {
-            if out.len() >= min_count {
-                break;
-            }
-            if !out.iter().any(|w| w.name == builtin.name) {
-                out.push(builtin.clone());
-            }
-        }
-        // Second pass: if min_count > number of unique built-ins, cycle through
-        // built-ins again with an index suffix, checking against existing names
-        // to guarantee uniqueness even when user files already use suffixed names.
-        if out.len() < min_count {
-            let mut cycle = 0usize;
-            while out.len() < min_count {
-                let b = &builtins[cycle % builtins.len()];
-                let mut suffix = cycle / builtins.len() + 2;
-                let name = loop {
-                    let candidate = format!("{}{}", b.name, suffix);
-                    if !out.iter().any(|w| w.name == candidate) {
-                        break candidate;
-                    }
-                    suffix += 1;
-                };
-                out.push(Wavetable {
-                    name,
-                    samples: b.samples.clone(),
-                });
-                cycle += 1;
-            }
-        }
-    }
-
-    Ok(out)
-}
-
-fn load_wavetable_file(path: &Path) -> Result<Option<Wavetable>> {
-    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-        return Ok(None);
-    };
-    let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
-        return Ok(None);
-    };
-
-    if !matches!(ext, "txt" | "csv") {
-        return Ok(None);
-    }
-
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read wavetable file: {}", path.display()))?;
-
-    let mut samples = Vec::new();
-    for token in content
-        .split(|c: char| c.is_whitespace() || c == ',')
-        .filter(|token| !token.is_empty())
-    {
-        let value: f32 = token
-            .parse()
-            .with_context(|| format!("invalid wavetable sample '{token}' in {}", path.display()))?;
-        samples.push(value.clamp(-1.0, 1.0));
-    }
-
-    if samples.len() < 2 {
-        return Ok(None);
-    }
-
-    Ok(Some(Wavetable {
-        name: stem.to_string(),
-        samples,
-    }))
-}
-
-pub fn default_sine_wavetable() -> Wavetable {
-    let size = 512;
-    let mut samples = Vec::with_capacity(size);
-    for i in 0..size {
-        let phase = (i as f32 / size as f32) * 2.0 * PI;
-        samples.push(phase.sin());
-    }
-    Wavetable {
-        name: "sine".to_string(),
-        samples,
-    }
-}
-
-pub fn builtin_wavetables() -> Vec<Wavetable> {
-    let size = 512;
-    let mut result = Vec::new();
-
-    // 1. sine
-    result.push(default_sine_wavetable());
-
-    // 2. triangle
-    {
-        let mut samples = Vec::with_capacity(size);
-        for i in 0..size {
-            let phase = i as f32 / size as f32;
-            let s = if phase < 0.25 {
-                4.0 * phase
-            } else if phase < 0.75 {
-                2.0 - 4.0 * phase
-            } else {
-                4.0 * phase - 4.0
-            };
-            samples.push(s);
-        }
-        result.push(Wavetable {
-            name: "triangle".to_string(),
-            samples,
-        });
-    }
-
-    // 3. sawtooth
-    {
-        let mut samples = Vec::with_capacity(size);
-        for i in 0..size {
-            let phase = i as f32 / size as f32;
-            samples.push(2.0 * phase - 1.0);
-        }
-        result.push(Wavetable {
-            name: "sawtooth".to_string(),
-            samples,
-        });
-    }
-
-    // 4. ramp
-    {
-        let mut samples = Vec::with_capacity(size);
-        for i in 0..size {
-            let phase = i as f32 / size as f32;
-            samples.push(1.0 - 2.0 * phase);
-        }
-        result.push(Wavetable {
-            name: "ramp".to_string(),
-            samples,
-        });
-    }
-
-    // 5. square
-    {
-        let mut samples = Vec::with_capacity(size);
-        for i in 0..size {
-            let phase = i as f32 / size as f32;
-            samples.push(if phase < 0.5 { 1.0 } else { -1.0 });
-        }
-        result.push(Wavetable {
-            name: "square".to_string(),
-            samples,
-        });
-    }
-
-    // 6. pulse33
-    {
-        let mut samples = Vec::with_capacity(size);
-        for i in 0..size {
-            let phase = i as f32 / size as f32;
-            samples.push(if phase < 0.333 { 1.0 } else { -1.0 });
-        }
-        result.push(Wavetable {
-            name: "pulse33".to_string(),
-            samples,
-        });
-    }
-
-    // 7. sine3rd
-    {
-        let mut samples = Vec::with_capacity(size);
-        for i in 0..size {
-            let phase = i as f32 / size as f32;
-            let phase_rad = phase * 2.0 * PI;
-            let s = (phase_rad.sin() + 0.5 * (3.0 * phase_rad).sin()).clamp(-1.0, 1.0);
-            samples.push(s);
-        }
-        result.push(Wavetable {
-            name: "sine3rd".to_string(),
-            samples,
-        });
-    }
-
-    // 8. sine5th
-    {
-        let mut samples = Vec::with_capacity(size);
-        for i in 0..size {
-            let phase = i as f32 / size as f32;
-            let phase_rad = phase * 2.0 * PI;
-            let s = (phase_rad.sin() + 0.33 * (5.0 * phase_rad).sin()).clamp(-1.0, 1.0);
-            samples.push(s);
-        }
-        result.push(Wavetable {
-            name: "sine5th".to_string(),
-            samples,
-        });
-    }
-
-    result
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, path::Path};
     use approx::assert_relative_eq;
     use std::collections::HashSet;
     use std::time::{SystemTime, UNIX_EPOCH};
