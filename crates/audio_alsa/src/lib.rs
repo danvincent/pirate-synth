@@ -51,9 +51,13 @@ pub enum AudioCommand {
     },
     SetWavetableBank(Arc<[Wavetable]>),
     SetTransitionSecs(f32),
-    SetVolume(u8),
+    SetWavetableVolume(u8),
     SetOscillatorsActive(bool),
     SetGranularWavs(usize),
+    SetGranularActive(bool),
+    SetGranularVolume(u8),
+    SetOscillatorCount(usize),
+    SetGranularVoices(usize),
     Stop,
 }
 
@@ -116,9 +120,13 @@ fn run_audio_loop(
                 } => engine.set_scale(mode, spread_percent),
                 AudioCommand::SetWavetableBank(tables) => engine.set_wavetable_bank(tables),
                 AudioCommand::SetTransitionSecs(secs) => engine.set_transition_secs(secs),
-                AudioCommand::SetVolume(level) => engine.set_volume(level),
+                AudioCommand::SetWavetableVolume(level) => engine.set_wavetable_volume(level),
                 AudioCommand::SetOscillatorsActive(active) => engine.set_oscillators_active(active),
                 AudioCommand::SetGranularWavs(count) => engine.set_granular_wavs(count),
+                AudioCommand::SetGranularActive(active) => engine.set_granular_active(active),
+                AudioCommand::SetGranularVolume(level) => engine.set_granular_volume(level),
+                AudioCommand::SetOscillatorCount(n) => engine.set_oscillator_count(n),
+                AudioCommand::SetGranularVoices(n) => engine.set_granular_voices(n),
                 AudioCommand::Stop => {
                     drop(stdin);
                     let _ = child.wait();

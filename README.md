@@ -18,11 +18,14 @@ Boot-to-synth Raspberry Pi Zero project for the Pimoroni Pirate Audio Headphone 
 ## Features
 
 - Wavetable synthesis with 8 built-in waveforms (sine, triangle, sawtooth, square, pulse, etc.)
-- Granular synthesis mode (auto-selected when WAV files are present)
+- Granular synthesis engine (auto-selected when WAV files are present in `wav_dir`)
+- Independent on/off and volume controls for Wavetable and Granular layers; both fade in/out over 5 seconds
+- Per-oscillator fade when oscillator count changes (only added/removed oscillators fade)
+- Per-voice fade when granular voice count changes (only added/removed sources fade)
 - Per-oscillator detune, drift LFO, stereo spread
 - Effects: reverb (Schroeder), tremolo, crossfade, filter sweep, FM, subtractive
 - 9 scale modes (chromatic, major, minor, pentatonic, dorian, etc.)
-- ST7789 240×240 display menu via SPI
+- 12-item ST7789 240×240 display menu via SPI
 - First-boot installer for Raspberry Pi OS Lite
 - Offline UI rendering (`--render-ui`) for development without hardware
 
@@ -89,8 +92,8 @@ Default values:
 sample_rate = 48000
 buffer_frames = 256
 oscillators = 8
-root_key = "C"
-root_octave = 2
+root_key = "A"
+root_octave = 1
 fine_tune_cents = 0
 wavetable_dir = "/var/lib/pirate-synth/wavetables"
 wav_dir = "/var/lib/pirate-synth/WAV"
@@ -102,6 +105,8 @@ granular_position_jitter = 0.15
 granular_attack_ms = 10.0
 granular_release_ms = 25.0
 granular_wavs = 8
+granular_volume = 50
+granular_active = false
 ```
 
 - `oscillators` controls simultaneous oscillators (allocated at startup)
@@ -110,10 +115,12 @@ granular_wavs = 8
   - if `wav_dir` contains `.wav` files, granular synthesis mode is used
   - otherwise the wavetable engine uses `wavetable_dir`
 - Granular mode currently supports WAV PCM16 and float32 sources (TODO: add more WAV variants/modulation features)
-- `granular_wavs` is adjustable in the UI menu (`GRAN WAVS`) and controls active granular source lanes:
+- `granular_wavs` controls the number of active granular source lanes (adjustable as `GR VOICES` in the UI):
   - `0` disables granular playback
   - values above loaded WAV file count round-robin the available files
-- If both `oscillators > 0` and `granular_wavs > 0`, wavetable and granular layers are mixed together.
+- `granular_volume` sets the initial granular output level (0–100); adjustable as `GR VOL` in the UI
+- `granular_active` sets whether the granular layer starts active at boot; toggleable as `GRANULAR` in the UI
+- Both layers can be active simultaneously; their volumes are mixed independently
 
 ## GPIO/SPI assumptions
 
