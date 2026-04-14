@@ -72,10 +72,11 @@ fn parse_wav_bytes(bytes: &[u8]) -> Result<(u32, u16, u16, u16, &[u8])> {
             bytes[cursor + 7],
         ]) as usize;
         cursor += 8;
-        if cursor + size > bytes.len() {
-            break;
-        }
-        let chunk = &bytes[cursor..cursor + size];
+        let chunk_end = cursor
+            .checked_add(size)
+            .filter(|&end| end <= bytes.len())
+            .ok_or_else(|| anyhow::anyhow!("truncated WAV chunk"))?;
+        let chunk = &bytes[cursor..chunk_end];
         if chunk_id == b"fmt " && size >= 16 {
             audio_format = Some(u16::from_le_bytes([chunk[0], chunk[1]]));
             channels = Some(u16::from_le_bytes([chunk[2], chunk[3]]));
