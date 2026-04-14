@@ -656,7 +656,7 @@ impl Engine {
                         }
                     }
                 }
-                osc.phase = new_phase.fract();
+                osc.phase = new_phase.rem_euclid(1.0);
 
                 // Smoothly ramp detune_ratio toward target
                 if osc.detune_ramp_rate > 0.0 {

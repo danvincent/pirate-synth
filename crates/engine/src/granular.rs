@@ -39,7 +39,7 @@ impl GranularState {
                .wrapping_mul(6364136223846793005_u64)
         });
 
-        // Initialize source_voices with stereo panning (0 = full left, 1 = full right)
+        // Initialize source_voices with stereo panning (-1 = full left, 0 = center, 1 = full right)
         let source_voices = sources
             .iter()
             .enumerate()
