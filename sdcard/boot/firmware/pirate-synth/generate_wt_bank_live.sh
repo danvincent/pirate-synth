@@ -10,7 +10,7 @@
 #   OUTPUT_DIR defaults to ./wavetables
 #
 # Requirements: curl, python3 (stdlib only)
-# Each successful fetch writes one .wt file. Failures are skipped with a warning.
+# Each successful fetch writes one .txt file. Failures are skipped with a warning.
 
 set -euo pipefail
 
@@ -19,11 +19,11 @@ mkdir -p "$OUT_DIR"
 
 # ---------------------------------------------------------------------------
 # Helper: normalise a newline-separated list of floats to [-1, 1] and write
-# a .wt file.  Accepts values on stdin.
+# a .txt file.  Accepts values on stdin.
 # ---------------------------------------------------------------------------
 normalise_and_write() {
   local name="$1"
-  OUT_PATH="$OUT_DIR/$name.wt" python3 -c "
+  OUT_PATH="$OUT_DIR/$name.txt" python3 -c "
 import sys, os
 out_path = os.environ['OUT_PATH']
 vals = []

@@ -68,9 +68,9 @@ write_soft_random() {
         print clamp(v)
       }
     }
-  ' > "$OUT_DIR/$name.wt"
+  ' > "$OUT_DIR/$name.txt"
 
-  echo "wrote $OUT_DIR/$name.wt ($size samples)"
+  echo "wrote $OUT_DIR/$name.txt ($size samples)"
 }
 
 for idx in $(seq 1 "$COUNT_RANDOM"); do
