@@ -888,7 +888,6 @@ impl Engine {
     }
 }
 
-
 pub fn key_to_frequency_hz(key: &str, octave: i32, fine_tune_cents: f32) -> Result<f32> {
     let semitone = key_to_semitone(key)? as i32;
     let midi_note = 12 * (octave + 1) + semitone;

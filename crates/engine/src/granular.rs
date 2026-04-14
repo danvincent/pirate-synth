@@ -148,7 +148,10 @@ pub(crate) fn spawn_grain(
         age_samples: 0,
         attack_samples: attack,
         release_samples: release,
-        voice: Voice::new(granular.source_voices[source_index].pan_l, granular.source_voices[source_index].pan_r),
+        voice: {
+            let sv = &granular.source_voices[source_index];
+            Voice::new(sv.pan_l, sv.pan_r)
+        },
         rng_state: grain_rng_state,
     });
 }
