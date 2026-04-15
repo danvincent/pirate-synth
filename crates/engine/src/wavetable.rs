@@ -16,14 +16,7 @@ pub(crate) fn lerp_table(table: &[f32], phase: f32) -> f32 {
     table[i0] * (1.0 - frac) + table[i1] * frac
 }
 
-pub(crate) fn read_from_bank(
-    tables: &[Wavetable],
-    cur_idx: usize,
-    next_idx: usize,
-    phase: f32,
-    xfade_t: f32,
-    crossfade_enabled: bool,
-) -> f32 {
+pub(crate) fn read_from_bank(tables: &[Wavetable], cur_idx: usize, next_idx: usize, phase: f32, xfade_t: f32, crossfade_enabled: bool) -> f32 {
     let s_cur = lerp_table(&tables[cur_idx].samples, phase);
     if crossfade_enabled && xfade_t > 0.0 {
         let s_next = lerp_table(&tables[next_idx].samples, phase);
@@ -43,14 +36,7 @@ pub(crate) fn sample_from_banks(
     xfade_t: f32,
     crossfade_enabled: bool,
 ) -> f32 {
-    let s = read_from_bank(
-        current,
-        cur_idx,
-        next_idx,
-        phase,
-        xfade_t,
-        crossfade_enabled,
-    );
+    let s = read_from_bank(current, cur_idx, next_idx, phase, xfade_t, crossfade_enabled);
     if bank_blend > 0.0 && !pending.is_empty() {
         let p_len = pending.len();
         let p_cur = cur_idx % p_len;
