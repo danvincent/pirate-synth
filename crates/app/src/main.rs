@@ -5,10 +5,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use audio_alsa::{command_channel, spawn_audio_thread, AudioCommand, AudioConfig};
+use crossbeam_channel::{unbounded, Receiver};
 use engine::{
     key_to_frequency_hz, load_wav_sources, load_wavetables, Engine, GranularConfig, ScaleMode,
 };
 use log::{debug, info, warn};
+use midir::{Ignore, MidiInput, MidiInputConnection};
 use serde::Deserialize;
 use ui::{ButtonReader, MenuState, St7789Display};
 
@@ -28,6 +30,8 @@ struct AppConfig {
     root_octave: i32,
     #[serde(default)]
     fine_tune_cents: f32,
+    #[serde(default = "default_midi_cents_cc")]
+    midi_cents_cc: u8,
     #[serde(default = "default_stereo_spread")]
     stereo_spread: u8,
     #[serde(default = "default_wavetable_dir")]
@@ -125,6 +129,9 @@ fn default_root_key() -> String {
     "A".into()
 }
 fn default_root_octave() -> i32 {
+    1
+}
+fn default_midi_cents_cc() -> u8 {
     1
 }
 fn default_wavetable_dir() -> PathBuf {
@@ -234,6 +241,7 @@ impl Default for AppConfig {
             root_key: default_root_key(),
             root_octave: default_root_octave(),
             fine_tune_cents: 0.0,
+            midi_cents_cc: default_midi_cents_cc(),
             stereo_spread: default_stereo_spread(),
             wavetable_dir: default_wavetable_dir(),
             wav_dir: default_wav_dir(),
@@ -299,6 +307,7 @@ struct UserConfig {
     root_key: Option<String>,
     root_octave: Option<i32>,
     fine_tune_cents: Option<f32>,
+    midi_cents_cc: Option<u8>,
     stereo_spread: Option<u8>,
     wavetable_dir: Option<PathBuf>,
     wav_dir: Option<PathBuf>,
@@ -360,6 +369,7 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         root_key: user.root_key.unwrap_or(base.root_key),
         root_octave: user.root_octave.unwrap_or(base.root_octave),
         fine_tune_cents: user.fine_tune_cents.unwrap_or(base.fine_tune_cents),
+        midi_cents_cc: user.midi_cents_cc.unwrap_or(base.midi_cents_cc),
         stereo_spread: user.stereo_spread.unwrap_or(base.stereo_spread),
         wavetable_dir: user.wavetable_dir.unwrap_or(base.wavetable_dir),
         wav_dir: user.wav_dir.unwrap_or(base.wav_dir),
@@ -401,7 +411,9 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         granular_attack_ms: user.granular_attack_ms.unwrap_or(base.granular_attack_ms),
         granular_release_ms: user.granular_release_ms.unwrap_or(base.granular_release_ms),
         granular_note_ms: user.granular_note_ms.unwrap_or(base.granular_note_ms),
-        granular_spawn_jitter: user.granular_spawn_jitter.unwrap_or(base.granular_spawn_jitter),
+        granular_spawn_jitter: user
+            .granular_spawn_jitter
+            .unwrap_or(base.granular_spawn_jitter),
         granular_wavs: user.granular_wavs.unwrap_or(base.granular_wavs),
         granular_volume: user.granular_volume.unwrap_or(base.granular_volume),
         granular_active: user.granular_active.unwrap_or(base.granular_active),
@@ -453,8 +465,8 @@ fn initialize_engine(config: &AppConfig, bank_name: &str) -> Result<Engine> {
         Vec::new()
     };
     if wav_sources.is_empty() {
-        let wavetables =
-            load_bank(&config.wavetable_dir, bank_name, config.oscillators).with_context(|| {
+        let wavetables = load_bank(&config.wavetable_dir, bank_name, config.oscillators)
+            .with_context(|| {
                 format!(
                     "failed loading wavetables from {}/{}",
                     config.wavetable_dir.display(),
@@ -498,7 +510,11 @@ fn scale_mode_from_index(idx: usize) -> ScaleMode {
     }
 }
 
-fn load_bank(wavetable_dir: &Path, bank_name: &str, min_count: usize) -> Result<Vec<engine::Wavetable>> {
+fn load_bank(
+    wavetable_dir: &Path,
+    bank_name: &str,
+    min_count: usize,
+) -> Result<Vec<engine::Wavetable>> {
     let bank_dir = wavetable_dir.join(bank_name);
     if bank_dir.is_dir() {
         load_wavetables(&bank_dir, min_count)
@@ -506,6 +522,77 @@ fn load_bank(wavetable_dir: &Path, bank_name: &str, min_count: usize) -> Result<
         // Fallback: load directly from wavetable_dir (backward compat)
         load_wavetables(wavetable_dir, min_count)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MidiEvent {
+    NoteOn(u8),
+    ControlChange { controller: u8, value: u8 },
+}
+
+struct MidiRuntime {
+    rx: Receiver<MidiEvent>,
+    _connection: MidiInputConnection<()>,
+}
+
+fn parse_midi_event(message: &[u8]) -> Option<MidiEvent> {
+    if message.len() < 3 {
+        return None;
+    }
+    let status = message[0] & 0xF0;
+    let data1 = message[1] & 0x7F;
+    let data2 = message[2] & 0x7F;
+    match status {
+        0x90 if data2 > 0 => Some(MidiEvent::NoteOn(data1)),
+        0xB0 => Some(MidiEvent::ControlChange {
+            controller: data1,
+            value: data2,
+        }),
+        _ => None,
+    }
+}
+
+fn midi_note_to_menu_key_octave(note: u8) -> (usize, i32) {
+    let key_index = (note % 12) as usize;
+    let octave = ((note / 12) as i32 - 1).clamp(0, 8);
+    (key_index, octave)
+}
+
+fn midi_cc_to_cents(value: u8) -> f32 {
+    ((value as f32 / 127.0) * 200.0) - 100.0
+}
+
+fn initialize_midi() -> Result<Option<MidiRuntime>> {
+    let mut midi_in =
+        MidiInput::new("pirate-synth-midi").context("failed to initialize MIDI input")?;
+    midi_in.ignore(Ignore::Time | Ignore::ActiveSense | Ignore::Sysex);
+    let ports = midi_in.ports();
+    if ports.is_empty() {
+        info!("no MIDI input ports detected");
+        return Ok(None);
+    }
+    let port = ports[0].clone();
+    let port_name = midi_in
+        .port_name(&port)
+        .unwrap_or_else(|_| "unknown-midi-input".to_string());
+    let (tx, rx) = unbounded();
+    let connection = midi_in
+        .connect(
+            &port,
+            "pirate-synth-midi-in",
+            move |_timestamp, message, _| {
+                if let Some(event) = parse_midi_event(message) {
+                    let _ = tx.try_send(event);
+                }
+            },
+            (),
+        )
+        .map_err(|err| anyhow::anyhow!("failed to connect to MIDI input '{port_name}': {err}"))?;
+    info!("connected MIDI input: {port_name}");
+    Ok(Some(MidiRuntime {
+        rx,
+        _connection: connection,
+    }))
 }
 
 fn main() -> Result<()> {
@@ -585,7 +672,10 @@ fn main() -> Result<()> {
     let initial_hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
     engine.set_frequency(initial_hz);
     apply_engine_params(&mut engine, &menu, &config);
-    engine.set_scale(scale_mode_from_index(config.scale_index), config.fine_tune_cents);
+    engine.set_scale(
+        scale_mode_from_index(config.scale_index),
+        config.fine_tune_cents,
+    );
     engine.set_transition_secs(config.transition_secs);
     engine.set_wavetable_volume(config.volume);
     engine.set_oscillators_active_immediate(config.oscillators_active);
@@ -607,6 +697,14 @@ fn main() -> Result<()> {
     info!("initializing button GPIO inputs");
     let mut buttons = ButtonReader::new().context("failed to configure Pirate Audio buttons")?;
     info!("button GPIO inputs initialized");
+    let midi = match initialize_midi() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            warn!("MIDI input disabled: {err}");
+            None
+        }
+    };
+    let midi_cents_cc = config.midi_cents_cc.min(127);
 
     info!("initializing ST7789 display over {}", config.spi_device);
     let mut display = St7789Display::new(&config.spi_device, 9, Some(13))
@@ -623,6 +721,35 @@ fn main() -> Result<()> {
     let mut pending_bank: Option<(usize, Instant)> = None;
 
     loop {
+        if let Some(midi) = &midi {
+            while let Ok(event) = midi.rx.try_recv() {
+                match event {
+                    MidiEvent::NoteOn(note) => {
+                        let (next_key, next_octave) = midi_note_to_menu_key_octave(note);
+                        if menu.key_index != next_key || menu.octave != next_octave {
+                            menu.key_index = next_key;
+                            menu.octave = next_octave;
+                            display.draw_menu(&menu)?;
+                            let hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
+                            if let Err(err) = audio_tx.try_send(AudioCommand::SetFrequencyHz(hz)) {
+                                warn!("failed to send MIDI note frequency update: {err}");
+                            }
+                        }
+                    }
+                    MidiEvent::ControlChange { controller, value } => {
+                        if controller == midi_cents_cc {
+                            let cents = midi_cc_to_cents(value);
+                            if (menu.fine_tune_cents - cents).abs() >= f32::EPSILON {
+                                menu.fine_tune_cents = cents;
+                                display.draw_menu(&menu)?;
+                                pending_cents = Some((menu.fine_tune_cents, Instant::now()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some(button) = buttons.poll_pressed()? {
             debug!("button press: {:?}", button);
             let old_key = menu.key_name();
@@ -669,37 +796,47 @@ fn main() -> Result<()> {
             }
 
             if menu.wt_volume != old_wt_volume {
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetWavetableVolume(menu.wt_volume)) {
+                if let Err(err) =
+                    audio_tx.try_send(AudioCommand::SetWavetableVolume(menu.wt_volume))
+                {
                     warn!("failed to send volume to audio thread: {err}");
                 }
             }
 
             if menu.gr_volume != old_gr_volume {
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetGranularVolume(menu.gr_volume)) {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetGranularVolume(menu.gr_volume))
+                {
                     warn!("failed to send granular volume: {err}");
                 }
             }
 
             if menu.oscillators_active != old_oscs {
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetOscillatorsActive(menu.oscillators_active)) {
+                if let Err(err) =
+                    audio_tx.try_send(AudioCommand::SetOscillatorsActive(menu.oscillators_active))
+                {
                     warn!("failed to send oscillators active to audio thread: {err}");
                 }
             }
 
             if menu.granular_active != old_granular_active {
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetGranularActive(menu.granular_active)) {
+                if let Err(err) =
+                    audio_tx.try_send(AudioCommand::SetGranularActive(menu.granular_active))
+                {
                     warn!("failed to send granular active: {err}");
                 }
             }
 
             if menu.osc_count != old_osc_count {
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetOscillatorCount(menu.osc_count)) {
+                if let Err(err) =
+                    audio_tx.try_send(AudioCommand::SetOscillatorCount(menu.osc_count))
+                {
                     warn!("failed to send oscillator count: {err}");
                 }
             }
 
             if menu.gr_voices != old_gr_voices {
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetGranularVoices(menu.gr_voices)) {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetGranularVoices(menu.gr_voices))
+                {
                     warn!("failed to send granular voices: {err}");
                 }
             }
@@ -738,8 +875,8 @@ fn main() -> Result<()> {
                 let bank_name = ui::BANK_NAMES.get(bank_idx).copied().unwrap_or("A");
                 match load_bank(&config.wavetable_dir, bank_name, config.oscillators) {
                     Ok(tables) => {
-                        if let Err(err) = audio_tx
-                            .try_send(AudioCommand::SetWavetableBank(Arc::from(tables)))
+                        if let Err(err) =
+                            audio_tx.try_send(AudioCommand::SetWavetableBank(Arc::from(tables)))
                         {
                             warn!("failed to send wavetable bank to audio thread: {err}");
                         }
@@ -779,6 +916,7 @@ mod tests {
         assert_eq!(config.oscillators, 8);
         assert_eq!(config.root_key, "A");
         assert_eq!(config.root_octave, 1);
+        assert_eq!(config.midi_cents_cc, 1);
         assert_eq!(config.stereo_spread, 100);
         assert_eq!(config.scale_index, 7);
         assert_eq!(config.volume, 50);
@@ -804,16 +942,47 @@ mod tests {
         let user = UserConfig {
             root_key: Some("G".into()),
             root_octave: Some(4),
+            midi_cents_cc: Some(74),
             fm_enabled: Some(true),
             ..UserConfig::default()
         };
         let merged = apply_user_config(base, user);
         assert_eq!(merged.root_key, "G");
         assert_eq!(merged.root_octave, 4);
+        assert_eq!(merged.midi_cents_cc, 74);
         assert!(merged.fm_enabled);
         // unchanged fields retain defaults
         assert_eq!(merged.sample_rate, 48_000);
         assert_eq!(merged.oscillators, 8);
         assert!(merged.reverb_enabled);
+    }
+
+    #[test]
+    fn parse_midi_event_handles_note_on_and_cc() {
+        assert_eq!(
+            parse_midi_event(&[0x90, 64, 100]),
+            Some(MidiEvent::NoteOn(64))
+        );
+        assert_eq!(
+            parse_midi_event(&[0xB3, 74, 127]),
+            Some(MidiEvent::ControlChange {
+                controller: 74,
+                value: 127
+            })
+        );
+        assert_eq!(parse_midi_event(&[0x90, 64, 0]), None);
+    }
+
+    #[test]
+    fn midi_note_to_menu_key_octave_maps_and_clamps() {
+        assert_eq!(midi_note_to_menu_key_octave(64), (4, 4)); // E4
+        assert_eq!(midi_note_to_menu_key_octave(0), (0, 0));
+        assert_eq!(midi_note_to_menu_key_octave(127), (7, 8));
+    }
+
+    #[test]
+    fn midi_cc_to_cents_spans_expected_range() {
+        assert!((midi_cc_to_cents(0) + 100.0).abs() < 0.001);
+        assert!((midi_cc_to_cents(127) - 100.0).abs() < 0.001);
     }
 }

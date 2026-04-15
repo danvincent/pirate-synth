@@ -4,6 +4,7 @@ oscillators = 16
 root_key = "A"
 root_octave = 1
 fine_tune_cents = 50
+midi_cents_cc = 1
 wavetable_dir = "/var/lib/pirate-synth/wavetables"
 wav_dir = "/var/lib/pirate-synth/WAV"
 spi_device = "/dev/spidev0.1"

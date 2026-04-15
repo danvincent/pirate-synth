@@ -36,7 +36,7 @@ impl GranularState {
         // Seed rng from source sample counts so each load has a unique phase.
         let rng_state = sources.iter().fold(0xdeadbeef_cafebabe_u64, |acc, s| {
             acc.wrapping_add(s.samples.len() as u64)
-               .wrapping_mul(6364136223846793005_u64)
+                .wrapping_mul(6364136223846793005_u64)
         });
 
         // Initialize source_voices with stereo panning (-1 = full left, 0 = center, 1 = full right)
@@ -106,8 +106,7 @@ pub(crate) fn spawn_grain(
     } else {
         granular.config.grain_size_ms
     };
-    let note_len_samples =
-        ((note_ms.max(1.0) / 1000.0) * output_sample_rate) as usize;
+    let note_len_samples = ((note_ms.max(1.0) / 1000.0) * output_sample_rate) as usize;
     let note_len_samples = note_len_samples.max(8);
 
     // Compute the source-space window this grain loops through.
@@ -122,7 +121,9 @@ pub(crate) fn spawn_grain(
     // Clamp window to what's actually available in the source from start_sample.
     let max_start = source_len.saturating_sub(window_source_samples.max(2) + 1);
     let start_sample = position * max_start as f32;
-    let avail = source_len.saturating_sub(start_sample as usize).saturating_sub(2);
+    let avail = source_len
+        .saturating_sub(start_sample as usize)
+        .saturating_sub(2);
     let window_source_samples = window_source_samples.min(avail).max(1);
 
     // Base C2 is used by the wavetable drone path, so we keep pitch relationships aligned.
