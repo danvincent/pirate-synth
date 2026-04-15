@@ -15,11 +15,13 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          sudo dpkg --add-architecture armhf
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             binutils \
             qemu-user-static \
             libasound2-dev \
+            libasound2-dev:armhf \
             gcc-arm-linux-gnueabihf \
             libc6-dev-armhf-cross \
             zip

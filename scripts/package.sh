@@ -48,6 +48,12 @@ archive_bundle() {
 rustup target add "$TARGET"
 
 mkdir -p "$BUILD_BIN_DIR"
+
+# Cross-compilation for ARM requires the ALSA pkg-config metadata from the
+# armhf sysroot. Set PKG_CONFIG env vars so alsa-sys finds the right headers.
+export PKG_CONFIG_ALLOW_CROSS=1
+export PKG_CONFIG_LIBDIR=/usr/lib/arm-linux-gnueabihf/pkgconfig
+
 cargo build --release --target "$TARGET" -p pirate_synth
 install -m 0755 "$ROOT_DIR/target/$TARGET/release/$BINARY_NAME" "$ARMHF_BINARY"
 
