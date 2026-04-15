@@ -562,6 +562,16 @@ fn midi_cc_to_cents(value: u8) -> f32 {
     ((value as f32 / 127.0) * 200.0) - 100.0
 }
 
+fn validate_midi_cc(controller: u8) -> Result<u8> {
+    if controller <= 127 {
+        Ok(controller)
+    } else {
+        Err(anyhow::anyhow!(
+            "invalid midi_cents_cc value {controller}; expected range 0..=127"
+        ))
+    }
+}
+
 fn initialize_midi() -> Result<Option<MidiRuntime>> {
     let mut midi_in =
         MidiInput::new("pirate-synth-midi").context("failed to initialize MIDI input")?;
@@ -620,6 +630,7 @@ fn main() -> Result<()> {
         },
         None => config,
     };
+    let midi_cents_cc = validate_midi_cc(config.midi_cents_cc)?;
     info!(
         "audio config: sample_rate={} buffer_frames={} oscillators={} wavetable dir={} wav dir={} spi_device={}",
         config.sample_rate,
@@ -704,7 +715,6 @@ fn main() -> Result<()> {
             None
         }
     };
-    let midi_cents_cc = config.midi_cents_cc.min(127);
 
     info!("initializing ST7789 display over {}", config.spi_device);
     let mut display = St7789Display::new(&config.spi_device, 9, Some(13))
@@ -739,7 +749,7 @@ fn main() -> Result<()> {
                     MidiEvent::ControlChange { controller, value } => {
                         if controller == midi_cents_cc {
                             let cents = midi_cc_to_cents(value);
-                            if (menu.fine_tune_cents - cents).abs() >= f32::EPSILON {
+                            if (menu.fine_tune_cents - cents).abs() >= 0.01 {
                                 menu.fine_tune_cents = cents;
                                 display.draw_menu(&menu)?;
                                 pending_cents = Some((menu.fine_tune_cents, Instant::now()));
@@ -984,5 +994,12 @@ mod tests {
     fn midi_cc_to_cents_spans_expected_range() {
         assert!((midi_cc_to_cents(0) + 100.0).abs() < 0.001);
         assert!((midi_cc_to_cents(127) - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn validate_midi_cc_enforces_standard_range() {
+        assert_eq!(validate_midi_cc(0).unwrap(), 0);
+        assert_eq!(validate_midi_cc(127).unwrap(), 127);
+        assert!(validate_midi_cc(200).is_err());
     }
 }
