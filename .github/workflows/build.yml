@@ -16,6 +16,16 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo dpkg --add-architecture armhf
+          # On Ubuntu noble the armhf packages are served from ports.ubuntu.com,
+          # not security.ubuntu.com.  Restrict the existing deb822 sources to
+          # amd64 only, then add a dedicated armhf source from ports.ubuntu.com.
+          sudo sed -i '/^Types: deb/a Architectures: amd64' \
+            /etc/apt/sources.list.d/ubuntu.sources
+          printf '%s\n' \
+            'deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe' \
+            'deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe' \
+            'deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe' \
+            | sudo tee /etc/apt/sources.list.d/armhf-ports.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             binutils \
