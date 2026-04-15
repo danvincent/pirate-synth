@@ -65,12 +65,14 @@ struct Oscillator {
     detune_ramp_rate: f32,
 }
 
+
 pub(crate) fn lcg_next(state: &mut u64) -> u32 {
     *state = state
         .wrapping_mul(6364136223846793005)
         .wrapping_add(1442695040888963407);
     ((*state >> 33) ^ (*state >> 17)) as u32
 }
+
 
 pub struct Engine {
     sample_rate: u32,
@@ -135,6 +137,7 @@ pub struct Engine {
     granular: Option<GranularState>,
 }
 
+
 impl Engine {
     pub fn new(
         sample_rate: u32,
@@ -170,10 +173,7 @@ impl Engine {
                 rng_state,
                 drift_lfo_phase: drift_lfo_start,
                 drift_lfo_rate_hz: drift_lfo_rate,
-                voice: Voice::new(
-                    std::f32::consts::FRAC_1_SQRT_2,
-                    std::f32::consts::FRAC_1_SQRT_2,
-                ),
+                voice: Voice::new(std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2),
                 tremolo_phase: tremolo_phase_start,
                 tremolo_rate_hz: tremolo_rate,
                 filter_lfo_phase: i as f32 / oscillator_count as f32,
@@ -486,11 +486,9 @@ impl Engine {
                 // Restore original uniform 4-cent spread
                 for (i, osc) in self.oscillators.iter_mut().enumerate() {
                     let cents = (i as f32 - center) * 4.0;
-                    let jitter =
-                        0.8 + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
+                    let jitter = 0.8 + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
                     osc.target_detune_ratio = 2.0f32.powf(cents / 1200.0);
-                    osc.detune_ramp_rate = 1.0
-                        / ((self.transition_secs * jitter).max(0.001) * self.sample_rate as f32);
+                    osc.detune_ramp_rate = 1.0 / ((self.transition_secs * jitter).max(0.001) * self.sample_rate as f32);
                 }
             }
             _ => {
@@ -537,12 +535,9 @@ impl Engine {
                         })
                         .unwrap_or(0.0);
 
-                    let jitter = 0.8
-                        + (lcg_next(&mut self.oscillators[i].rng_state) as f32 / u32::MAX as f32)
-                            * 0.4;
+                    let jitter = 0.8 + (lcg_next(&mut self.oscillators[i].rng_state) as f32 / u32::MAX as f32) * 0.4;
                     self.oscillators[i].target_detune_ratio = 2.0f32.powf(nearest_cents / 1200.0);
-                    self.oscillators[i].detune_ramp_rate = 1.0
-                        / ((self.transition_secs * jitter).max(0.001) * self.sample_rate as f32);
+                    self.oscillators[i].detune_ramp_rate = 1.0 / ((self.transition_secs * jitter).max(0.001) * self.sample_rate as f32);
                 }
             }
         }
@@ -575,22 +570,9 @@ impl Engine {
                 for (osc_idx, osc) in self.oscillators.iter().enumerate() {
                     if osc_idx % 2 == 1 {
                         // peek at current sample without advancing phase
-                        let cur_idx = (self.wavetable_offset
-                            + self.xfade_index_offset
-                            + osc.wt_offset
-                            + osc_idx)
-                            % table_count;
+                        let cur_idx = (self.wavetable_offset + self.xfade_index_offset + osc.wt_offset + osc_idx) % table_count;
                         let next_idx = (cur_idx + 1) % table_count;
-                        let s = sample_from_banks(
-                            &self.wavetables,
-                            &self.pending_wavetables,
-                            self.bank_blend,
-                            cur_idx,
-                            next_idx,
-                            osc.phase,
-                            self.xfade_t,
-                            self.crossfade_enabled,
-                        );
+                        let s = sample_from_banks(&self.wavetables, &self.pending_wavetables, self.bank_blend, cur_idx, next_idx, osc.phase, self.xfade_t, self.crossfade_enabled);
                         acc += s;
                     }
                 }
@@ -606,20 +588,9 @@ impl Engine {
             let table_count = self.wavetables.len();
 
             for (osc_idx, osc) in self.oscillators.iter_mut().enumerate() {
-                let cur_idx =
-                    (self.wavetable_offset + self.xfade_index_offset + osc.wt_offset + osc_idx)
-                        % table_count;
+                let cur_idx = (self.wavetable_offset + self.xfade_index_offset + osc.wt_offset + osc_idx) % table_count;
                 let next_idx = (cur_idx + 1) % table_count;
-                let s = sample_from_banks(
-                    &self.wavetables,
-                    &self.pending_wavetables,
-                    self.bank_blend,
-                    cur_idx,
-                    next_idx,
-                    osc.phase,
-                    self.xfade_t,
-                    self.crossfade_enabled,
-                );
+                let s = sample_from_banks(&self.wavetables, &self.pending_wavetables, self.bank_blend, cur_idx, next_idx, osc.phase, self.xfade_t, self.crossfade_enabled);
                 let mut s = s;
 
                 // Apply tremolo if enabled
@@ -677,14 +648,10 @@ impl Engine {
                                 let st_idx =
                                     lcg_next(&mut osc.rng_state) as usize % semitones.len();
                                 let octave = lcg_next(&mut osc.rng_state) % 2;
-                                let cents =
-                                    (semitones[st_idx] * 100) as f32 + (octave as f32 * 1200.0);
-                                let jitter = 0.8
-                                    + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
+                                let cents = (semitones[st_idx] * 100) as f32 + (octave as f32 * 1200.0);
+                                let jitter = 0.8 + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
                                 osc.target_detune_ratio = 2.0f32.powf(cents / 1200.0);
-                                osc.detune_ramp_rate = 1.0
-                                    / ((self.transition_secs * jitter).max(0.001)
-                                        * self.sample_rate as f32);
+                                osc.detune_ramp_rate = 1.0 / ((self.transition_secs * jitter).max(0.001) * self.sample_rate as f32);
                             }
                         }
                     }
@@ -694,11 +661,9 @@ impl Engine {
                 // Smoothly ramp detune_ratio toward target
                 if osc.detune_ramp_rate > 0.0 {
                     if osc.detune_ratio < osc.target_detune_ratio {
-                        osc.detune_ratio =
-                            (osc.detune_ratio + osc.detune_ramp_rate).min(osc.target_detune_ratio);
+                        osc.detune_ratio = (osc.detune_ratio + osc.detune_ramp_rate).min(osc.target_detune_ratio);
                     } else if osc.detune_ratio > osc.target_detune_ratio {
-                        osc.detune_ratio =
-                            (osc.detune_ratio - osc.detune_ramp_rate).max(osc.target_detune_ratio);
+                        osc.detune_ratio = (osc.detune_ratio - osc.detune_ramp_rate).max(osc.target_detune_ratio);
                     }
                 }
 
@@ -782,20 +747,16 @@ impl Engine {
 
             // Step fine_tune_cents toward target (rate set with jitter by set_fine_tune_cents)
             if self.fine_tune_cents < self.target_fine_tune_cents {
-                self.fine_tune_cents =
-                    (self.fine_tune_cents + self.cents_ramp_rate).min(self.target_fine_tune_cents);
+                self.fine_tune_cents = (self.fine_tune_cents + self.cents_ramp_rate).min(self.target_fine_tune_cents);
             } else if self.fine_tune_cents > self.target_fine_tune_cents {
-                self.fine_tune_cents =
-                    (self.fine_tune_cents - self.cents_ramp_rate).max(self.target_fine_tune_cents);
+                self.fine_tune_cents = (self.fine_tune_cents - self.cents_ramp_rate).max(self.target_fine_tune_cents);
             }
 
             // Step bank blend toward target (rate set with jitter by set_wavetable_bank)
             if self.bank_blend < self.bank_blend_target {
-                self.bank_blend =
-                    (self.bank_blend + self.bank_ramp_rate).min(self.bank_blend_target);
+                self.bank_blend = (self.bank_blend + self.bank_ramp_rate).min(self.bank_blend_target);
             } else if self.bank_blend > self.bank_blend_target {
-                self.bank_blend =
-                    (self.bank_blend - self.bank_ramp_rate).max(self.bank_blend_target);
+                self.bank_blend = (self.bank_blend - self.bank_ramp_rate).max(self.bank_blend_target);
             }
             // When fully transitioned, promote pending to current bank
             if self.bank_blend >= 1.0 && !self.pending_wavetables.is_empty() {
@@ -808,11 +769,9 @@ impl Engine {
             // Ramp granular gain toward target (5-second fade)
             let granular_fade_rate = 1.0 / (5.0 * self.sample_rate as f32);
             if self.granular_gain < self.granular_target_gain {
-                self.granular_gain =
-                    (self.granular_gain + granular_fade_rate).min(self.granular_target_gain);
+                self.granular_gain = (self.granular_gain + granular_fade_rate).min(self.granular_target_gain);
             } else if self.granular_gain > self.granular_target_gain {
-                self.granular_gain =
-                    (self.granular_gain - granular_fade_rate).max(self.granular_target_gain);
+                self.granular_gain = (self.granular_gain - granular_fade_rate).max(self.granular_target_gain);
             }
 
             let gain = 0.25f32 / self.oscillators.len() as f32;
@@ -864,10 +823,8 @@ impl Engine {
             );
             granular.samples_until_next_grain += spawn_interval_samples;
             // Apply jitter so successive grains don't fire at a rigid interval.
-            let jitter_range =
-                granular.config.spawn_jitter.clamp(0.0, 1.0) * spawn_interval_samples;
-            let jitter_val =
-                (lcg_next(&mut granular.rng_state) as f32 / u32::MAX as f32) * 2.0 - 1.0;
+            let jitter_range = granular.config.spawn_jitter.clamp(0.0, 1.0) * spawn_interval_samples;
+            let jitter_val = (lcg_next(&mut granular.rng_state) as f32 / u32::MAX as f32) * 2.0 - 1.0;
             granular.samples_until_next_grain += jitter_val * jitter_range;
         }
 
@@ -958,13 +915,14 @@ fn key_to_semitone(key: &str) -> Result<u8> {
     Ok(value)
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, path::Path};
     use approx::assert_relative_eq;
     use std::collections::HashSet;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use std::{fs, path::Path};
 
     #[test]
     fn load_wavetables_cycles_builtins_when_min_count_exceeds_unique_builtin_count() {
@@ -2294,10 +2252,7 @@ mod tests {
         engine.render_i16_stereo(&mut buf);
         let mag_loud = buf.iter().map(|&s| (s as f32).abs()).sum::<f32>();
 
-        assert!(
-            mag_loud > mag_silent,
-            "immediate activation should produce louder output"
-        );
+        assert!(mag_loud > mag_silent, "immediate activation should produce louder output");
     }
 
     #[test]

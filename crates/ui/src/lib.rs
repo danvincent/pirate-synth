@@ -164,14 +164,8 @@ impl MenuState {
 
     pub fn lines(&self) -> Vec<String> {
         vec![
-            format!(
-                "WAVETABLE: {}",
-                if self.oscillators_active { "ON" } else { "OFF" }
-            ),
-            format!(
-                "GRANULAR: {}",
-                if self.granular_active { "ON" } else { "OFF" }
-            ),
+            format!("WAVETABLE: {}", if self.oscillators_active { "ON" } else { "OFF" }),
+            format!("GRANULAR: {}", if self.granular_active { "ON" } else { "OFF" }),
             format!("KEY: {}", self.key_name()),
             format!("SCALE: {}", SCALE_NAMES[self.scale_index]),
             format!("OCTAVE: {}", self.octave),
@@ -515,18 +509,15 @@ mod tests {
             menu.apply_button(Button::Down);
         }
         assert_eq!(menu.selected_item, 11);
-        assert!(
-            menu.scroll_offset > 0,
-            "scroll_offset should shift when selected item exceeds visible window"
-        );
+        assert!(menu.scroll_offset > 0, "scroll_offset should shift when selected item exceeds visible window");
     }
 
     #[test]
     fn menu_default_values_match_spec() {
         let menu = MenuState::new(0.0, 8, 8);
-        assert_eq!(menu.key_index, 9); // A
+        assert_eq!(menu.key_index, 9);           // A
         assert_eq!(menu.octave, 1);
-        assert_eq!(menu.scale_index, 7); // HIRAJOSHI
+        assert_eq!(menu.scale_index, 7);         // HIRAJOSHI
         assert_eq!(menu.stereo_spread, 100);
         assert_eq!(menu.wt_volume, 50);
         assert_eq!(menu.gr_volume, 50);
@@ -539,54 +530,18 @@ mod tests {
     fn menu_lines_correct_labels() {
         let menu = MenuState::new(0.0, 8, 8);
         let lines = menu.lines();
-        assert!(
-            lines[0].starts_with("WAVETABLE:"),
-            "line 0 should start with WAVETABLE:"
-        );
-        assert!(
-            lines[1].starts_with("GRANULAR:"),
-            "line 1 should start with GRANULAR:"
-        );
-        assert!(
-            lines[2].starts_with("KEY:"),
-            "line 2 should start with KEY:"
-        );
-        assert!(
-            lines[3].starts_with("SCALE:"),
-            "line 3 should start with SCALE:"
-        );
-        assert!(
-            lines[4].starts_with("OCTAVE:"),
-            "line 4 should start with OCTAVE:"
-        );
-        assert!(
-            lines[5].starts_with("STEREO:"),
-            "line 5 should start with STEREO:"
-        );
-        assert!(
-            lines[6].starts_with("WT BANK:"),
-            "line 6 should start with WT BANK:"
-        );
-        assert!(
-            lines[7].starts_with("WT VOL:"),
-            "line 7 should start with WT VOL:"
-        );
-        assert!(
-            lines[8].starts_with("GR VOL:"),
-            "line 8 should start with GR VOL:"
-        );
-        assert!(
-            lines[9].starts_with("CENTS:"),
-            "line 9 should start with CENTS:"
-        );
-        assert!(
-            lines[10].starts_with("WT OSCS:"),
-            "line 10 should start with WT OSCS:"
-        );
-        assert!(
-            lines[11].starts_with("GR VOICES:"),
-            "line 11 should start with GR VOICES:"
-        );
+        assert!(lines[0].starts_with("WAVETABLE:"), "line 0 should start with WAVETABLE:");
+        assert!(lines[1].starts_with("GRANULAR:"), "line 1 should start with GRANULAR:");
+        assert!(lines[2].starts_with("KEY:"), "line 2 should start with KEY:");
+        assert!(lines[3].starts_with("SCALE:"), "line 3 should start with SCALE:");
+        assert!(lines[4].starts_with("OCTAVE:"), "line 4 should start with OCTAVE:");
+        assert!(lines[5].starts_with("STEREO:"), "line 5 should start with STEREO:");
+        assert!(lines[6].starts_with("WT BANK:"), "line 6 should start with WT BANK:");
+        assert!(lines[7].starts_with("WT VOL:"), "line 7 should start with WT VOL:");
+        assert!(lines[8].starts_with("GR VOL:"), "line 8 should start with GR VOL:");
+        assert!(lines[9].starts_with("CENTS:"), "line 9 should start with CENTS:");
+        assert!(lines[10].starts_with("WT OSCS:"), "line 10 should start with WT OSCS:");
+        assert!(lines[11].starts_with("GR VOICES:"), "line 11 should start with GR VOICES:");
     }
 
     #[test]
