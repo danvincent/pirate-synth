@@ -10,7 +10,8 @@ use engine::{
 };
 use log::{debug, info, warn};
 use serde::Deserialize;
-use ui::{ButtonReader, MenuState, St7789Display};
+use ui::{ButtonReader, MenuState, St7789Display, VideoStatus};
+use visuals_drm::{try_spawn_visuals, VisualsInitError};
 
 const DEFAULT_CONFIG_PATH: &str = "/etc/pirate-synth/config.toml";
 
@@ -110,6 +111,8 @@ struct AppConfig {
     pub granular_volume: u8,
     #[serde(default = "default_granular_active")]
     pub granular_active: bool,
+    #[serde(default = "default_hdmi_visuals_enabled")]
+    hdmi_visuals_enabled: bool,
 }
 
 fn default_sample_rate() -> u32 {
@@ -224,6 +227,9 @@ fn default_granular_volume() -> u8 {
 fn default_granular_active() -> bool {
     false
 }
+fn default_hdmi_visuals_enabled() -> bool {
+    false
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -269,6 +275,7 @@ impl Default for AppConfig {
             granular_wavs: default_granular_wavs(),
             granular_volume: default_granular_volume(),
             granular_active: default_granular_active(),
+            hdmi_visuals_enabled: default_hdmi_visuals_enabled(),
         }
     }
 }
@@ -334,6 +341,7 @@ struct UserConfig {
     granular_wavs: Option<usize>,
     granular_volume: Option<u8>,
     granular_active: Option<bool>,
+    hdmi_visuals_enabled: Option<bool>,
 }
 
 fn user_config_path() -> Option<PathBuf> {
@@ -405,6 +413,7 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         granular_wavs: user.granular_wavs.unwrap_or(base.granular_wavs),
         granular_volume: user.granular_volume.unwrap_or(base.granular_volume),
         granular_active: user.granular_active.unwrap_or(base.granular_active),
+        hdmi_visuals_enabled: user.hdmi_visuals_enabled.unwrap_or(base.hdmi_visuals_enabled),
     }
 }
 
@@ -579,6 +588,27 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let mut visuals_level_tx = None;
+    if config.hdmi_visuals_enabled {
+        match try_spawn_visuals() {
+            Ok(level_tx) => {
+                menu.video_status = VideoStatus::On;
+                visuals_level_tx = Some(level_tx);
+                info!("HDMI visuals enabled");
+            }
+            Err(VisualsInitError::NoHdmi) => {
+                menu.video_status = VideoStatus::NoHdmi;
+                warn!("HDMI visuals enabled in config but no HDMI connector is connected");
+            }
+            Err(VisualsInitError::Init(err)) => {
+                menu.video_status = VideoStatus::NoHdmi;
+                warn!("HDMI visuals disabled after DRM/framebuffer init failure: {err:#}");
+            }
+        }
+    } else {
+        menu.video_status = VideoStatus::Off;
+    }
+
     info!("initializing synth engine");
     let mut engine = initialize_engine(&config, initial_bank)?;
     info!("selected synthesis source: {:?}", engine.source_kind());
@@ -602,6 +632,7 @@ fn main() -> Result<()> {
             buffer_frames: config.buffer_frames,
         },
         audio_rx,
+        visuals_level_tx,
     );
 
     info!("initializing button GPIO inputs");
@@ -787,6 +818,7 @@ mod tests {
         assert_eq!(config.wav_dir, PathBuf::from("/var/lib/pirate-synth/WAV"));
         assert_eq!(config.granular_max_overlap, 16);
         assert_eq!(config.granular_wavs, 8);
+        assert!(!config.hdmi_visuals_enabled);
     }
 
     #[test]
@@ -797,6 +829,7 @@ mod tests {
         assert!((config.reverb_wet - 0.20).abs() < 0.001);
         assert!(config.tremolo_enabled);
         assert!((config.tremolo_depth - 0.35).abs() < 0.001);
+        assert!(!config.hdmi_visuals_enabled);
     }
     #[test]
     fn apply_user_config_overrides_selected_fields() {
@@ -805,12 +838,14 @@ mod tests {
             root_key: Some("G".into()),
             root_octave: Some(4),
             fm_enabled: Some(true),
+            hdmi_visuals_enabled: Some(true),
             ..UserConfig::default()
         };
         let merged = apply_user_config(base, user);
         assert_eq!(merged.root_key, "G");
         assert_eq!(merged.root_octave, 4);
         assert!(merged.fm_enabled);
+        assert!(merged.hdmi_visuals_enabled);
         // unchanged fields retain defaults
         assert_eq!(merged.sample_rate, 48_000);
         assert_eq!(merged.oscillators, 8);

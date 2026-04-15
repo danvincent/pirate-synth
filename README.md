@@ -25,7 +25,7 @@ Boot-to-synth Raspberry Pi Zero project for the Pimoroni Pirate Audio Headphone 
 - Per-oscillator detune, drift LFO, stereo spread
 - Effects: reverb (Schroeder), tremolo, crossfade, filter sweep, FM, subtractive
 - 9 scale modes (chromatic, major, minor, pentatonic, dorian, etc.)
-- 12-item ST7789 240×240 display menu via SPI
+- 13-item ST7789 240×240 display menu via SPI (includes `VIDEO: OFF|ON|NO HDMI` status)
 - First-boot installer for Raspberry Pi OS Lite
 - Offline UI rendering (`--render-ui`) for development without hardware
 
@@ -107,6 +107,7 @@ granular_release_ms = 25.0
 granular_wavs = 8
 granular_volume = 50
 granular_active = false
+hdmi_visuals_enabled = false
 ```
 
 - `oscillators` controls simultaneous oscillators (allocated at startup)
@@ -120,6 +121,7 @@ granular_active = false
   - values above loaded WAV file count round-robin the available files
 - `granular_volume` sets the initial granular output level (0–100); adjustable as `GR VOL` in the UI
 - `granular_active` sets whether the granular layer starts active at boot; toggleable as `GRANULAR` in the UI
+- `hdmi_visuals_enabled` gates HDMI visualizer startup (`VIDEO: OFF|ON|NO HDMI` in the UI)
 - Both layers can be active simultaneously; their volumes are mixed independently
 
 ## GPIO/SPI assumptions
