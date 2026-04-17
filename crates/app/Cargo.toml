@@ -17,5 +17,6 @@ midir = "0.10.3"
 audio_alsa = { path = "../audio_alsa" }
 engine = { path = "../engine" }
 ui = { path = "../ui" }
+visuals_drm = { path = "../visuals_drm" }
 log = "0.4.29"
 env_logger = "0.11.10"

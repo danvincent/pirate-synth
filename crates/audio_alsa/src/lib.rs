@@ -65,14 +65,16 @@ pub fn spawn_audio_thread(
     mut engine: Engine,
     config: AudioConfig,
     command_rx: Receiver<AudioCommand>,
+    level_tx: Option<Sender<f32>>,
 ) -> thread::JoinHandle<Result<()>> {
-    thread::spawn(move || run_audio_loop(&mut engine, &config, command_rx))
+    thread::spawn(move || run_audio_loop(&mut engine, &config, command_rx, level_tx))
 }
 
 fn run_audio_loop(
     engine: &mut Engine,
     config: &AudioConfig,
     command_rx: Receiver<AudioCommand>,
+    level_tx: Option<Sender<f32>>,
 ) -> Result<()> {
     let mut child = Command::new("aplay")
         .args([
@@ -136,11 +138,23 @@ fn run_audio_loop(
         }
 
         engine.render_i16_stereo(&mut buffer);
+        if let Some(tx) = &level_tx {
+            let _ = tx.try_send(measure_level(&buffer));
+        }
         i16_to_le_bytes(&buffer, &mut bytes);
         stdin
             .write_all(&bytes)
             .context("failed streaming PCM to aplay")?;
     }
+}
+
+fn measure_level(samples: &[i16]) -> f32 {
+    let peak = samples
+        .iter()
+        .map(|sample| sample.unsigned_abs())
+        .max()
+        .unwrap_or(0);
+    (peak as f32 / i16::MAX as f32).clamp(0.0, 1.0)
 }
 
 fn i16_to_le_bytes(samples: &[i16], out: &mut [u8]) {
@@ -154,4 +168,19 @@ fn i16_to_le_bytes(samples: &[i16], out: &mut [u8]) {
 
 pub fn command_channel() -> (Sender<AudioCommand>, Receiver<AudioCommand>) {
     crossbeam_channel::bounded(32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::measure_level;
+
+    #[test]
+    fn measure_level_is_zero_for_silence() {
+        assert_eq!(measure_level(&[0, 0, 0, 0]), 0.0);
+    }
+
+    #[test]
+    fn measure_level_clamps_to_one() {
+        assert_eq!(measure_level(&[i16::MIN, i16::MAX]), 1.0);
+    }
 }

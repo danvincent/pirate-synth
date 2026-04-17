@@ -8,6 +8,7 @@ midi_cents_cc = 1
 wavetable_dir = "/var/lib/pirate-synth/wavetables"
 wav_dir = "/var/lib/pirate-synth/WAV"
 spi_device = "/dev/spidev0.1"
+hdmi_visuals_enabled = false
 
 # Audio effects (all feature-flagged, safe to set false if CPU load too high)
 reverb_enabled = true

@@ -36,6 +36,23 @@ pub enum Button {
     Back,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoStatus {
+    Off,
+    On,
+    NoHdmi,
+}
+
+impl VideoStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "OFF",
+            Self::On => "ON",
+            Self::NoHdmi => "NO HDMI",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct MenuState {
     pub key_index: usize,
@@ -50,6 +67,7 @@ pub struct MenuState {
     pub granular_active: bool,
     pub osc_count: usize,
     pub gr_voices: usize,
+    pub video_status: VideoStatus,
     pub selected_item: usize,
     pub scroll_offset: usize,
 }
@@ -69,6 +87,7 @@ impl MenuState {
             granular_active: false,
             osc_count,
             gr_voices,
+            video_status: VideoStatus::Off,
             selected_item: 0,
             scroll_offset: 0,
         }
@@ -79,7 +98,7 @@ impl MenuState {
     }
 
     pub fn total_items(&self) -> usize {
-        12
+        13
     }
 
     pub fn apply_button(&mut self, button: Button) {
@@ -176,6 +195,7 @@ impl MenuState {
             format!("CENTS: {:+}", self.fine_tune_cents as i32),
             format!("WT OSCS: {}", self.osc_count),
             format!("GR VOICES: {}", self.gr_voices),
+            format!("VIDEO: {}", self.video_status.as_str()),
         ]
     }
 }
@@ -489,10 +509,10 @@ mod tests {
     }
 
     #[test]
-    fn menu_has_twelve_items() {
+    fn menu_has_thirteen_items() {
         let menu = MenuState::new(0.0, 8, 8);
-        assert_eq!(menu.total_items(), 12);
-        assert_eq!(menu.lines().len(), 12);
+        assert_eq!(menu.total_items(), 13);
+        assert_eq!(menu.lines().len(), 13);
     }
 
     #[test]
@@ -542,6 +562,17 @@ mod tests {
         assert!(lines[9].starts_with("CENTS:"), "line 9 should start with CENTS:");
         assert!(lines[10].starts_with("WT OSCS:"), "line 10 should start with WT OSCS:");
         assert!(lines[11].starts_with("GR VOICES:"), "line 11 should start with GR VOICES:");
+        assert!(lines[12].starts_with("VIDEO:"), "line 12 should start with VIDEO:");
+    }
+
+    #[test]
+    fn menu_video_line_reports_state() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        assert_eq!(menu.lines()[12], "VIDEO: OFF");
+        menu.video_status = VideoStatus::On;
+        assert_eq!(menu.lines()[12], "VIDEO: ON");
+        menu.video_status = VideoStatus::NoHdmi;
+        assert_eq!(menu.lines()[12], "VIDEO: NO HDMI");
     }
 
     #[test]
