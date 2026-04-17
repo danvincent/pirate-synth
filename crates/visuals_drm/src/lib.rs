@@ -330,7 +330,7 @@ fn fill_block(
                     frame[pixel_offset] = gray;
                     frame[pixel_offset + 1] = gray;
                     frame[pixel_offset + 2] = gray;
-                    frame[pixel_offset + 3] = 0;
+                    frame[pixel_offset + 3] = 0xFF;
                 }
             }
         }
