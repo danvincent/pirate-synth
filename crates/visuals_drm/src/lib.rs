@@ -129,7 +129,6 @@ pub fn try_spawn_visuals() -> std::result::Result<Sender<f32>, VisualsInitError>
 
     OpenOptions::new()
         .read(true)
-        .write(true)
         .open("/dev/dri/card0")
         .context("failed to open /dev/dri/card0 for DRM probe")
         .map_err(VisualsInitError::Init)?;
