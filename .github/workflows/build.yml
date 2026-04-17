@@ -9,22 +9,26 @@ permissions:
 
 jobs:
   package:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
         run: |
+          set -euo pipefail
+          source /etc/os-release
+          UBUNTU_CODENAME="${VERSION_CODENAME}"
+
           sudo dpkg --add-architecture armhf
-          # On Ubuntu noble the armhf packages are served from ports.ubuntu.com,
-          # not security.ubuntu.com.  Restrict the existing deb822 sources to
-          # amd64 only, then add a dedicated armhf source from ports.ubuntu.com.
+          # On Ubuntu runners the armhf packages are served from ports.ubuntu.com.
+          # Restrict the existing deb822 sources to amd64 only, then add a
+          # dedicated armhf source from ports.ubuntu.com for the current suite.
           sudo sed -i '/^Types: deb/a Architectures: amd64' \
             /etc/apt/sources.list.d/ubuntu.sources
           printf '%s\n' \
-            'deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe' \
-            'deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe' \
-            'deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe' \
+            "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME} main restricted universe" \
+            "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME}-updates main restricted universe" \
+            "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME}-security main restricted universe" \
             | sudo tee /etc/apt/sources.list.d/armhf-ports.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -40,7 +44,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Run focused tests
-        run: cargo test -p engine -p ui
+        run: cargo test -p engine -p ui -p pirate_synth
 
       - name: Build ARMv6 binary (Pi Zero / Zero W)
         run: |

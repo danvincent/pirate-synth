@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use audio_alsa::{command_channel, spawn_audio_thread, AudioCommand, AudioConfig};
-use crossbeam_channel::{unbounded, Receiver};
+use crossbeam_channel::{bounded, Receiver};
 use engine::{
     key_to_frequency_hz, load_wav_sources, load_wavetables, Engine, GranularConfig, ScaleMode,
 };
@@ -585,7 +585,7 @@ fn initialize_midi() -> Result<Option<MidiRuntime>> {
     let port_name = midi_in
         .port_name(&port)
         .unwrap_or_else(|_| "unknown-midi-input".to_string());
-    let (tx, rx) = unbounded();
+    let (tx, rx) = bounded(64);
     let connection = midi_in
         .connect(
             &port,
@@ -751,7 +751,6 @@ fn main() -> Result<()> {
                             let cents = midi_cc_to_cents(value);
                             if (menu.fine_tune_cents - cents).abs() >= 0.01 {
                                 menu.fine_tune_cents = cents;
-                                display.draw_menu(&menu)?;
                                 pending_cents = Some((menu.fine_tune_cents, Instant::now()));
                             }
                         }
@@ -856,6 +855,7 @@ fn main() -> Result<()> {
         let now = Instant::now();
         if let Some((cents, since)) = pending_cents {
             if now.duration_since(since) >= DEBOUNCE {
+                display.draw_menu(&menu)?;
                 if let Err(err) = audio_tx.try_send(AudioCommand::SetFineTuneCents(cents)) {
                     warn!("failed to send fine tune cents to audio thread: {err}");
                 }
