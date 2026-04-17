@@ -1,3 +1,4 @@
+// HDMI visuals backend with DRM connector probing and fbdev framebuffer rendering.
 use std::fs::{read_dir, read_to_string, File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
@@ -120,7 +121,14 @@ impl std::fmt::Display for VisualsInitError {
     }
 }
 
-impl std::error::Error for VisualsInitError {}
+impl std::error::Error for VisualsInitError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NoHdmi => None,
+            Self::Init(err) => Some(err.as_ref()),
+        }
+    }
+}
 
 pub fn try_spawn_visuals() -> std::result::Result<Sender<f32>, VisualsInitError> {
     if !has_connected_hdmi().map_err(|err| VisualsInitError::Init(err.into()))? {
@@ -130,7 +138,7 @@ pub fn try_spawn_visuals() -> std::result::Result<Sender<f32>, VisualsInitError>
     OpenOptions::new()
         .read(true)
         .open("/dev/dri/card0")
-        .context("failed to open /dev/dri/card0 for DRM probe")
+        .context("failed to open /dev/dri/card0 for DRM connector probe")
         .map_err(VisualsInitError::Init)?;
 
     let fb = open_framebuffer().map_err(VisualsInitError::Init)?;
@@ -195,7 +203,7 @@ fn open_framebuffer() -> Result<Framebuffer> {
         other => anyhow::bail!("unsupported fb0 format {}bpp", other),
     };
     info!(
-        "HDMI visuals framebuffer ready: {}x{} {}bpp",
+        "HDMI visuals fbdev framebuffer ready: {}x{} {}bpp",
         var.xres, var.yres, var.bits_per_pixel
     );
     Ok(Framebuffer {

@@ -24,6 +24,8 @@ Boot-to-synth Raspberry Pi Zero project for the Pimoroni Pirate Audio Headphone 
 - Per-voice fade when granular voice count changes (only added/removed sources fade)
 - Per-oscillator detune, drift LFO, stereo spread
 - Effects: reverb (Schroeder), tremolo, crossfade, filter sweep, FM, subtractive
+- Class-compliant USB MIDI keyboard note input (monophonic, most recent note latches key/octave)
+- MIDI CC control for cents detune (`midi_cents_cc` in config)
 - 9 scale modes (chromatic, major, minor, pentatonic, dorian, etc.)
 - 13-item ST7789 240×240 display menu via SPI (includes `VIDEO: OFF|ON|NO HDMI` status)
 - First-boot installer for Raspberry Pi OS Lite
@@ -95,6 +97,7 @@ oscillators = 8
 root_key = "A"
 root_octave = 1
 fine_tune_cents = 0
+midi_cents_cc = 1
 wavetable_dir = "/var/lib/pirate-synth/wavetables"
 wav_dir = "/var/lib/pirate-synth/WAV"
 granular_grain_size_ms = 120.0
@@ -112,6 +115,8 @@ hdmi_visuals_enabled = false
 
 - `oscillators` controls simultaneous oscillators (allocated at startup)
 - `root_key`, `root_octave`, `fine_tune_cents` tune the drone via the UI
+- USB MIDI note-on updates `root_key` and `root_octave` live (note-off is ignored so notes latch)
+- `midi_cents_cc` defines which MIDI CC number (0-127) controls `fine_tune_cents` from -100 to +100
 - Engine selection is automatic by source-folder origin:
   - if `wav_dir` contains `.wav` files, granular synthesis mode is used
   - otherwise the wavetable engine uses `wavetable_dir`
