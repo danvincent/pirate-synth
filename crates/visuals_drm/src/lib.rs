@@ -258,7 +258,7 @@ fn render_static_layers(frame: &mut [u8], fb: &Framebuffer, level: f32, frame_in
     let layer_alpha = [0.25f32, 0.45, 0.7, 1.0];
 
     for layer in 0..layer_scales.len() {
-        let block = (block_base * layer_scales[layer] / layer_divisors[layer]).clamp(1, 96);
+        let block = (block_base * layer_scales[layer] / layer_divisors[layer]).clamp(2, 96);
         let x_shift = (frame_index as usize / (2 + layer)).wrapping_mul(3 + layer) % block;
         let y_shift = (frame_index as usize / (3 + layer)).wrapping_mul(2 + layer) % block;
 
