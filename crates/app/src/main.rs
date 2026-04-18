@@ -590,10 +590,24 @@ fn initialize_midi() -> Result<Option<MidiRuntime>> {
         info!("no MIDI input ports detected");
         return Ok(None);
     }
-    let port = ports[0].clone();
-    let port_name = midi_in
-        .port_name(&port)
-        .unwrap_or_else(|_| "unknown-midi-input".to_string());
+
+    // Log all detected ports so users can debug mismatches.
+    let port_names: Vec<String> = ports
+        .iter()
+        .map(|p| midi_in.port_name(p).unwrap_or_else(|_| "unknown".to_string()))
+        .collect();
+    info!("detected MIDI input ports: {:?}", port_names);
+
+    // Prefer the first port that is not a virtual passthrough (e.g. "Midi Through").
+    // Fall back to ports[0] if every port looks virtual.
+    let selected_index = port_names
+        .iter()
+        .position(|name| !name.to_lowercase().contains("midi through"))
+        .unwrap_or(0);
+
+    let port = ports[selected_index].clone();
+    let port_name = port_names[selected_index].clone();
+
     let (tx, rx) = bounded(64);
     let connection = midi_in
         .connect(
@@ -686,6 +700,13 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if args.iter().any(|arg| arg == "--render-mockup") {
+        let dir = PathBuf::from("/tmp");
+        ui::draw_redesign_mockups_ppm(&dir)?;
+        info!("rendered redesign mockups to /tmp/redesign-screen*.ppm");
+        return Ok(());
+    }
+
     let mut visuals_level_tx = None;
     if config.hdmi_visuals_enabled {
         match try_spawn_visuals() {
@@ -761,9 +782,22 @@ fn main() -> Result<()> {
     let mut pending_scale: Option<(usize, Instant)> = None;
     let mut pending_bank: Option<(usize, Instant)> = None;
 
+    const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+    let mut last_activity = Instant::now();
+    let mut idle_mode = false;
+
     loop {
+        // Idle timeout: switch to graphical overview screen
+        if !idle_mode && last_activity.elapsed() >= IDLE_TIMEOUT {
+            idle_mode = true;
+            if let Err(err) = display.draw_idle_screen(&menu) {
+                warn!("failed to draw idle screen: {err}");
+            }
+        }
+
         if let Some(midi) = &midi {
             while let Ok(event) = midi.rx.try_recv() {
+                last_activity = Instant::now();
                 match event {
                     MidiEvent::NoteOn(note) => {
                         let (next_key, next_octave) = midi_note_to_menu_key_octave(note);
@@ -779,6 +813,7 @@ fn main() -> Result<()> {
                     }
                     MidiEvent::ControlChange { controller, value } => {
                         if controller == midi_cents_cc {
+                            last_activity = Instant::now();
                             let cents = midi_cc_to_cents(value);
                             if (menu.fine_tune_cents - cents).abs() >= 0.01 {
                                 menu.fine_tune_cents = cents;
@@ -791,6 +826,16 @@ fn main() -> Result<()> {
         }
 
         if let Some(button) = buttons.poll_pressed()? {
+            last_activity = Instant::now();
+
+            // If idle, any key wakes the display and resumes the menu
+            if idle_mode {
+                idle_mode = false;
+                display.draw_menu(&menu)?;
+                std::thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+
             debug!("button press: {:?}", button);
             let old_key = menu.key_name();
             let old_octave = menu.octave;
