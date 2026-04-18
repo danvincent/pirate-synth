@@ -34,6 +34,38 @@ ensure_line "gpio=25=op,dh"
 apt-get update
 apt-get install -y --no-install-recommends alsa-utils
 
+# ---------------------------------------------------------------------------
+# Purge packages that serve no purpose on a dedicated headless audio
+# appliance.  Names that are absent are silently skipped via || true.
+# ---------------------------------------------------------------------------
+apt-get purge -y --auto-remove \
+  avahi-daemon \
+  bluez \
+  bluez-firmware \
+  pi-bluetooth \
+  modemmanager \
+  triggerhappy \
+  nfs-common \
+  rpcbind \
+  usb-modeswitch \
+  usb-modeswitch-data \
+  man-db \
+  manpages \
+  raspi-config \
+  tasksel \
+  tasksel-data \
+  apt-listchanges \
+  installation-report \
+  ppp \
+  cifs-utils \
+  2>/dev/null || true
+
+apt-get autoremove -y
+apt-get clean
+
+# Drop offline documentation and locale data not removed by purge.
+rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
+
 install -m 0755 "$BOOT_DIR/bin/pirate_synth" /usr/local/bin/pirate_synth
 install -m 0644 "$BOOT_DIR/config/config.toml" /etc/pirate-synth/config.toml
 if [[ ! -d /var/lib/pirate-synth/wavetables ]]; then
