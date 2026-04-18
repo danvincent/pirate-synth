@@ -74,14 +74,9 @@ archive_bundle "$ARMV6_BUNDLE_NAME"
 # Remove staging dirs and temporary binaries now that archives are created.
 rm -rf "$BUILD_BIN_DIR" "$ARMHF_STAGE_DIR" "$ARMV6_STAGE_DIR"
 
-# Strip debug info from the cross-compiled release artifacts to reclaim
-# space in the Cargo target directory.
-arm-linux-gnueabihf-strip --strip-unneeded \
-  "$ROOT_DIR/target/$TARGET/release/$BINARY_NAME" 2>/dev/null || true
-
-# Clean incremental compilation artefacts for the cross-compiled target;
-# these are only useful during active development and can be several hundred
-# MB after a release build.
+# Clean cross-compiled release and incremental artefacts now that packaging
+# is complete; these are only useful during active development and can
+# consume significant space after a release build.
 cargo clean --release --target "$TARGET" 2>/dev/null || true
 
 echo "Packaged bundles in: $DIST_DIR"
