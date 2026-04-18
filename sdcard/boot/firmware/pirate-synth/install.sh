@@ -71,7 +71,6 @@ done
 if (( ${#installed_purge_candidates[@]} > 0 )); then
   apt-get purge -y --auto-remove "${installed_purge_candidates[@]}"
 fi
-apt-get autoremove -y
 apt-get clean
 
 # Drop offline documentation and locale data not removed by purge.
