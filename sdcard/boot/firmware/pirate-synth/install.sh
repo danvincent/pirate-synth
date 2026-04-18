@@ -63,9 +63,21 @@ purge_candidates=(
 
 installed_purge_candidates=()
 for pkg in "${purge_candidates[@]}"; do
-  if dpkg-query -W -f='${db:Status-Abbrev}' "$pkg" 2>/dev/null | grep -q '^ii'; then
-    installed_purge_candidates+=("$pkg")
+  dpkg_query_output="$(dpkg-query -W -f='${db:Status-Abbrev}' "$pkg" 2>&1)" || dpkg_query_status=$?
+  dpkg_query_status="${dpkg_query_status:-0}"
+
+  if (( dpkg_query_status == 0 )); then
+    if grep -q '^ii' <<<"$dpkg_query_output"; then
+      installed_purge_candidates+=("$pkg")
+    fi
+  elif grep -Fq "no packages found matching" <<<"$dpkg_query_output"; then
+    :
+  else
+    printf '%s\n' "$dpkg_query_output" >&2
+    exit "$dpkg_query_status"
   fi
+
+  unset dpkg_query_status
 done
 
 if (( ${#installed_purge_candidates[@]} > 0 )); then
