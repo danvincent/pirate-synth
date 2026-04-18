@@ -36,30 +36,41 @@ apt-get install -y --no-install-recommends alsa-utils
 
 # ---------------------------------------------------------------------------
 # Purge packages that serve no purpose on a dedicated headless audio
-# appliance.  Names that are absent are silently skipped via || true.
+# appliance.  Names that are absent are skipped, while real purge failures
+# remain visible and still stop the installer under set -e.
 # ---------------------------------------------------------------------------
-apt-get purge -y --auto-remove \
-  avahi-daemon \
-  bluez \
-  bluez-firmware \
-  pi-bluetooth \
-  modemmanager \
-  triggerhappy \
-  nfs-common \
-  rpcbind \
-  usb-modeswitch \
-  usb-modeswitch-data \
-  man-db \
-  manpages \
-  raspi-config \
-  tasksel \
-  tasksel-data \
-  apt-listchanges \
-  installation-report \
-  ppp \
-  cifs-utils \
-  2>/dev/null || true
+purge_candidates=(
+  avahi-daemon
+  bluez
+  bluez-firmware
+  pi-bluetooth
+  modemmanager
+  triggerhappy
+  nfs-common
+  rpcbind
+  usb-modeswitch
+  usb-modeswitch-data
+  man-db
+  manpages
+  raspi-config
+  tasksel
+  tasksel-data
+  apt-listchanges
+  installation-report
+  ppp
+  cifs-utils
+)
 
+installed_purge_candidates=()
+for pkg in "${purge_candidates[@]}"; do
+  if dpkg-query -W -f='${db:Status-Abbrev}' "$pkg" 2>/dev/null | grep -q '^ii'; then
+    installed_purge_candidates+=("$pkg")
+  fi
+done
+
+if (( ${#installed_purge_candidates[@]} > 0 )); then
+  apt-get purge -y --auto-remove "${installed_purge_candidates[@]}"
+fi
 apt-get autoremove -y
 apt-get clean
 
