@@ -73,6 +73,17 @@ pub(crate) fn lcg_next(state: &mut u64) -> u32 {
     ((*state >> 33) ^ (*state >> 17)) as u32
 }
 
+fn constant_power_pan(lane_index: usize, active_count: usize, spread: f32) -> (f32, f32) {
+    let spread = spread.clamp(0.0, 1.0);
+    let pan_pos = if active_count <= 1 {
+        0.0f32
+    } else {
+        (-1.0 + 2.0 * lane_index as f32 / (active_count - 1) as f32) * spread
+    };
+    let angle = (pan_pos + 1.0) * std::f32::consts::FRAC_PI_4;
+    (angle.cos(), angle.sin())
+}
+
 
 pub struct Engine {
     sample_rate: u32,
@@ -139,6 +150,27 @@ pub struct Engine {
 
 
 impl Engine {
+    fn repan_granular_sources(granular: &mut GranularState) {
+        for voice in &mut granular.source_voices {
+            let (pan_l, pan_r) = constant_power_pan(0, 1, 1.0);
+            voice.pan_l = pan_l;
+            voice.pan_r = pan_r;
+        }
+
+        let source_count = granular.source_voices.len();
+        if source_count == 0 {
+            return;
+        }
+
+        let active = granular.configured_wavs.min(source_count);
+        for lane in 0..active {
+            let source_index = (granular.source_offset + lane) % source_count;
+            let (pan_l, pan_r) = constant_power_pan(lane, active, 1.0);
+            granular.source_voices[source_index].pan_l = pan_l;
+            granular.source_voices[source_index].pan_r = pan_r;
+        }
+    }
+
     pub fn new(
         sample_rate: u32,
         oscillator_count: usize,
@@ -297,16 +329,17 @@ impl Engine {
         let spread = spread.min(100);
         self.stereo_spread = spread;
         let spread_f = spread as f32 / 100.0;
-        let n = self.oscillators.len();
+        let n = self.active_osc_count;
         for (i, osc) in self.oscillators.iter_mut().enumerate() {
-            let pan_pos = if n <= 1 {
-                0.0f32
+            // Pan only the active oscillators (0..n); inactive ones are centered so
+            // they don't contribute audible bias if their gain hasn't reached zero yet.
+            let (pan_l, pan_r) = if i < n {
+                constant_power_pan(i, n, spread_f)
             } else {
-                (-1.0 + 2.0 * i as f32 / (n - 1) as f32) * spread_f
+                constant_power_pan(0, 1, 1.0)
             };
-            let angle = (pan_pos + 1.0) * std::f32::consts::FRAC_PI_4;
-            osc.voice.pan_l = angle.cos();
-            osc.voice.pan_r = angle.sin();
+            osc.voice.pan_l = pan_l;
+            osc.voice.pan_r = pan_r;
         }
     }
 
@@ -314,6 +347,7 @@ impl Engine {
         if let Some(granular) = self.granular.as_mut() {
             if !granular.sources.is_empty() {
                 granular.source_offset = offset % granular.sources.len();
+                Self::repan_granular_sources(granular);
             }
         } else if !self.wavetables.is_empty() {
             self.wavetable_offset = offset % self.wavetables.len();
@@ -353,6 +387,7 @@ impl Engine {
             if granular_wavs == 0 {
                 granular.active_grains.clear();
             }
+            Self::repan_granular_sources(granular);
         }
     }
 
@@ -450,6 +485,9 @@ impl Engine {
             }
         }
         self.active_osc_count = n;
+        // Re-distribute pan positions for the new active count so the middle
+        // oscillator of an odd count lands exactly at centre.
+        self.set_stereo_spread(self.stereo_spread);
     }
 
     /// Set the number of active granular voices with fade in/out.
@@ -473,6 +511,10 @@ impl Engine {
                 }
             }
             g.configured_wavs = n;
+            if n == 0 {
+                g.active_grains.clear();
+            }
+            Self::repan_granular_sources(g);
         }
     }
 
@@ -2390,5 +2432,82 @@ mod tests {
         let mut buf = vec![0i16; 512];
         engine.render_i16_stereo(&mut buf);
         assert!(buf.len() == 512);
+    }
+
+    #[test]
+    fn granular_voice_panning_respects_source_offset() {
+        let sources = vec![
+            GranularSource {
+                name: "src0".to_string(),
+                sample_rate: 48_000,
+                samples: vec![1.0; 1000],
+            },
+            GranularSource {
+                name: "src1".to_string(),
+                sample_rate: 48_000,
+                samples: vec![1.0; 1000],
+            },
+            GranularSource {
+                name: "src2".to_string(),
+                sample_rate: 48_000,
+                samples: vec![1.0; 1000],
+            },
+            GranularSource {
+                name: "src3".to_string(),
+                sample_rate: 48_000,
+                samples: vec![1.0; 1000],
+            },
+        ];
+        let mut engine = Engine::new_granular(48_000, 2, sources, GranularConfig::default()).unwrap();
+        engine.set_wavetable_offset(2);
+        engine.set_granular_voices(3);
+        let granular = engine.granular.as_ref().unwrap();
+        let center = std::f32::consts::FRAC_1_SQRT_2;
+
+        // Active indices are rotated by source_offset: [2, 3, 0]
+        assert_relative_eq!(granular.source_voices[2].pan_l, 1.0, epsilon = 1e-6);
+        assert_relative_eq!(granular.source_voices[2].pan_r, 0.0, epsilon = 1e-6);
+        assert_relative_eq!(granular.source_voices[3].pan_l, center, epsilon = 1e-6);
+        assert_relative_eq!(granular.source_voices[3].pan_r, center, epsilon = 1e-6);
+        assert_relative_eq!(granular.source_voices[0].pan_l, 0.0, epsilon = 1e-6);
+        assert_relative_eq!(granular.source_voices[0].pan_r, 1.0, epsilon = 1e-6);
+        // Inactive voices are centered.
+        assert_relative_eq!(granular.source_voices[1].pan_l, center, epsilon = 1e-6);
+        assert_relative_eq!(granular.source_voices[1].pan_r, center, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn set_granular_wavs_recomputes_panning_for_active_sources() {
+        let sources = vec![
+            GranularSource {
+                name: "src0".to_string(),
+                sample_rate: 48_000,
+                samples: vec![1.0; 1000],
+            },
+            GranularSource {
+                name: "src1".to_string(),
+                sample_rate: 48_000,
+                samples: vec![1.0; 1000],
+            },
+            GranularSource {
+                name: "src2".to_string(),
+                sample_rate: 48_000,
+                samples: vec![1.0; 1000],
+            },
+        ];
+        let mut engine = Engine::new_granular(48_000, 2, sources, GranularConfig::default()).unwrap();
+        engine.set_wavetable_offset(1);
+        engine.set_granular_wavs(2);
+        let granular = engine.granular.as_ref().unwrap();
+        let center = std::f32::consts::FRAC_1_SQRT_2;
+
+        // Active indices are rotated by source_offset: [1, 2]
+        assert_relative_eq!(granular.source_voices[1].pan_l, 1.0, epsilon = 1e-6);
+        assert_relative_eq!(granular.source_voices[1].pan_r, 0.0, epsilon = 1e-6);
+        assert_relative_eq!(granular.source_voices[2].pan_l, 0.0, epsilon = 1e-6);
+        assert_relative_eq!(granular.source_voices[2].pan_r, 1.0, epsilon = 1e-6);
+        // Inactive voice is centered.
+        assert_relative_eq!(granular.source_voices[0].pan_l, center, epsilon = 1e-6);
+        assert_relative_eq!(granular.source_voices[0].pan_r, center, epsilon = 1e-6);
     }
 }
