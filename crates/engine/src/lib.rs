@@ -297,12 +297,18 @@ impl Engine {
         let spread = spread.min(100);
         self.stereo_spread = spread;
         let spread_f = spread as f32 / 100.0;
-        let n = self.oscillators.len();
+        let n = self.active_osc_count;
         for (i, osc) in self.oscillators.iter_mut().enumerate() {
-            let pan_pos = if n <= 1 {
-                0.0f32
+            // Pan only the active oscillators (0..n); inactive ones are centered so
+            // they don't contribute audible bias if their gain hasn't reached zero yet.
+            let pan_pos = if i < n {
+                if n <= 1 {
+                    0.0f32
+                } else {
+                    (-1.0 + 2.0 * i as f32 / (n - 1) as f32) * spread_f
+                }
             } else {
-                (-1.0 + 2.0 * i as f32 / (n - 1) as f32) * spread_f
+                0.0f32
             };
             let angle = (pan_pos + 1.0) * std::f32::consts::FRAC_PI_4;
             osc.voice.pan_l = angle.cos();
@@ -450,6 +456,9 @@ impl Engine {
             }
         }
         self.active_osc_count = n;
+        // Re-distribute pan positions for the new active count so the middle
+        // oscillator of an odd count lands exactly at centre.
+        self.set_stereo_spread(self.stereo_spread);
     }
 
     /// Set the number of active granular voices with fade in/out.
@@ -473,6 +482,22 @@ impl Engine {
                 }
             }
             g.configured_wavs = n;
+            // Re-distribute pan positions so the middle grain voice of an odd
+            // count is panned exactly at centre.
+            for (i, voice) in g.source_voices.iter_mut().enumerate() {
+                let pan_pos = if i < n {
+                    if n <= 1 {
+                        0.0f32
+                    } else {
+                        -1.0 + 2.0 * i as f32 / (n - 1) as f32
+                    }
+                } else {
+                    0.0f32
+                };
+                let angle = (pan_pos + 1.0) * std::f32::consts::FRAC_PI_4;
+                voice.pan_l = angle.cos();
+                voice.pan_r = angle.sin();
+            }
         }
     }
 
