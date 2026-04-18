@@ -2,7 +2,6 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use font8x8::UnicodeFonts;
 use rppal::gpio::{Gpio, InputPin, OutputPin};
 use rppal::spi::{Bus, Mode, SlaveSelect, Spi};
 
@@ -10,20 +9,151 @@ use rppal::spi::{Bus, Mode, SlaveSelect, Spi};
 const SPI_FRAMEBUFFER_CHUNK_SIZE: usize = 4096;
 const SPI_CLOCK_HZ: u32 = 16_000_000;
 
+const FONT_DATA: [[u8; 8]; 128] = [
+    [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00],
+    [0x7C,0x82,0xAA,0x82,0xBA,0x82,0x7C,0x00],
+    [0x00,0x00,0x6C,0x92,0x92,0x6C,0x00,0x00],
+    [0x44,0xEE,0xFE,0xFE,0x7C,0x38,0x10,0x00],
+    [0x10,0x38,0x7C,0xFE,0x7C,0x38,0x10,0x00],
+    [0x10,0x38,0x54,0xEE,0x54,0x10,0x38,0x00],
+    [0x10,0x38,0x7C,0xEE,0x54,0x10,0x38,0x00],
+    [0x00,0x00,0x18,0x3C,0x18,0x00,0x00,0x00],
+    [0xF0,0xF0,0xF0,0xF0,0xF0,0xF0,0xF0,0xF0],
+    [0x00,0x00,0x3C,0x66,0x66,0x3C,0x00,0x00],
+    [0x0F,0x0F,0x0F,0x0F,0x0F,0x0F,0x0F,0x0F],
+    [0x1E,0x0E,0x1A,0x38,0x6C,0x6C,0x38,0x00],
+    [0x38,0x6C,0x6C,0x38,0x10,0x38,0x10,0x00],
+    [0x10,0x18,0x14,0x14,0x10,0x70,0x60,0x00],
+    [0x28,0x10,0x7C,0xC0,0x7C,0x06,0xFC,0x00],
+    [0x10,0x54,0x38,0xC6,0x38,0x54,0x10,0x00],
+    [0x80,0xE0,0xF8,0xFE,0xF8,0xE0,0x80,0x00],
+    [0x02,0x0E,0x3E,0xFE,0x3E,0x0E,0x02,0x00],
+    [0x10,0x38,0x7C,0x10,0x7C,0x38,0x10,0x00],
+    [0x28,0x10,0x38,0x60,0x38,0x0C,0x78,0x00],
+    [0x00,0x7E,0xB6,0xB6,0x76,0x36,0x36,0x00],
+    [0x78,0xC0,0x78,0xCC,0x78,0x0C,0x78,0x00],
+    [0x00,0x00,0x08,0x7C,0x10,0x7C,0x20,0x00],
+    [0x28,0x10,0xFE,0x8C,0x30,0xC6,0xFE,0x00],
+    [0x10,0x38,0x7C,0x10,0x10,0x10,0x10,0x00],
+    [0x10,0x10,0x10,0x10,0x7C,0x38,0x10,0x00],
+    [0x00,0x08,0x0C,0xFE,0x0C,0x08,0x00,0x00],
+    [0x00,0x20,0x60,0xFE,0x60,0x20,0x00,0x00],
+    [0x28,0x10,0x00,0x7C,0x18,0x30,0x7C,0x00],
+    [0x00,0x28,0x6C,0xFE,0x6C,0x28,0x00,0x00],
+    [0x10,0x10,0x38,0x38,0x7C,0x7C,0xFE,0x00],
+    [0xFE,0x7C,0x7C,0x38,0x38,0x10,0x10,0x00],
+    [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00],
+    [0x00,0x30,0x78,0x78,0x30,0x00,0x30,0x00],
+    [0xC6,0xC6,0x6C,0x00,0x00,0x00,0x00,0x00],
+    [0x00,0x6C,0xFE,0x6C,0x6C,0xFE,0x6C,0x00],
+    [0x10,0x7C,0xD0,0x7C,0x16,0xD6,0x7C,0x10],
+    [0x00,0x44,0xE8,0x50,0x28,0x5C,0x88,0x00],
+    [0x00,0x30,0x58,0x72,0xDC,0xCC,0x7A,0x00],
+    [0x18,0x18,0x30,0x00,0x00,0x00,0x00,0x00],
+    [0x00,0x0C,0x18,0x18,0x18,0x18,0x0C,0x00],
+    [0x00,0x60,0x30,0x30,0x30,0x30,0x60,0x00],
+    [0x00,0x00,0x48,0x30,0xFC,0x30,0x48,0x00],
+    [0x00,0x00,0x30,0x30,0xFC,0x30,0x30,0x00],
+    [0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x30],
+    [0x00,0x00,0x00,0x00,0x7C,0x00,0x00,0x00],
+    [0x00,0x00,0x00,0x00,0x00,0x00,0x30,0x00],
+    [0x00,0x06,0x0C,0x18,0x30,0x60,0xC0,0x00],
+    [0x00,0x7C,0xCE,0xD6,0xD6,0xE6,0x7C,0x00],
+    [0x00,0x30,0x70,0xF0,0x30,0x30,0xFC,0x00],
+    [0x00,0x7C,0xC6,0x06,0x7C,0xC0,0xFE,0x00],
+    [0x00,0x7C,0xC6,0x1C,0x06,0xC6,0x7C,0x00],
+    [0x00,0x3C,0x6C,0xCC,0xFE,0x0C,0x0C,0x00],
+    [0x00,0xFE,0xC0,0xFC,0x06,0xC6,0x7C,0x00],
+    [0x00,0x7C,0xC0,0xFC,0xC6,0xC6,0x7C,0x00],
+    [0x00,0xFE,0x06,0x0C,0x0C,0x18,0x18,0x00],
+    [0x00,0x7C,0xC6,0x7C,0xC6,0xC6,0x7C,0x00],
+    [0x00,0x7C,0xC6,0xC6,0x7E,0x06,0x7C,0x00],
+    [0x00,0x00,0x00,0x30,0x00,0x00,0x30,0x00],
+    [0x00,0x00,0x00,0x30,0x00,0x30,0x30,0x60],
+    [0x00,0x00,0x18,0x30,0x60,0x30,0x18,0x00],
+    [0x00,0x00,0x00,0x7C,0x00,0x7C,0x00,0x00],
+    [0x00,0x00,0x30,0x18,0x0C,0x18,0x30,0x00],
+    [0x00,0x7C,0xC6,0x0C,0x18,0x00,0x18,0x00],
+    [0x00,0x7C,0xCE,0xDA,0xCE,0xC0,0x7E,0x00],
+    [0x00,0x10,0x38,0x6C,0x6C,0xFE,0xC6,0x00],
+    [0x00,0xFC,0x66,0x7C,0x66,0x66,0xFC,0x00],
+    [0x00,0x7C,0xC6,0xC0,0xC0,0xC6,0x7C,0x00],
+    [0x00,0xFC,0x66,0x66,0x66,0x66,0xFC,0x00],
+    [0x00,0xFE,0x62,0x78,0x60,0x62,0xFE,0x00],
+    [0x00,0xFE,0x62,0x78,0x60,0x60,0xF0,0x00],
+    [0x00,0x7C,0xC6,0xC0,0xCE,0xC6,0x7C,0x00],
+    [0x00,0xC6,0xC6,0xFE,0xC6,0xC6,0xC6,0x00],
+    [0x00,0xFC,0x30,0x30,0x30,0x30,0xFC,0x00],
+    [0x00,0x1E,0x0C,0x0C,0x0C,0xCC,0x78,0x00],
+    [0x00,0xE6,0x6C,0x78,0x6C,0x66,0xE6,0x00],
+    [0x00,0xF0,0x60,0x60,0x60,0x64,0xFC,0x00],
+    [0x00,0xC6,0xEE,0xFE,0xD6,0xC6,0xC6,0x00],
+    [0x00,0xC6,0xE6,0xD6,0xD6,0xCE,0xC6,0x00],
+    [0x00,0x7C,0xC6,0xC6,0xC6,0xC6,0x7C,0x00],
+    [0x00,0xFC,0x66,0x66,0x7C,0x60,0xF0,0x00],
+    [0x00,0x7C,0xC6,0xC6,0xC6,0xDE,0x7C,0x06],
+    [0x00,0xFC,0x66,0x66,0x7C,0x66,0xF6,0x00],
+    [0x00,0x7C,0xC0,0x7C,0x06,0xC6,0x7C,0x00],
+    [0x00,0xFC,0xB4,0x30,0x30,0x30,0x78,0x00],
+    [0x00,0xC6,0xC6,0xC6,0xC6,0xC6,0x7C,0x00],
+    [0x00,0xC6,0xC6,0x6C,0x6C,0x38,0x10,0x00],
+    [0x00,0xC6,0xC6,0xD6,0xFE,0xEE,0x44,0x00],
+    [0x00,0xC6,0x6C,0x38,0x38,0x6C,0xC6,0x00],
+    [0x00,0xCC,0xCC,0x78,0x30,0x30,0x78,0x00],
+    [0x00,0xFE,0xCC,0x18,0x30,0x66,0xFE,0x00],
+    [0x00,0x3E,0x30,0x30,0x30,0x30,0x3E,0x00],
+    [0x00,0xC0,0x60,0x30,0x18,0x0C,0x06,0x00],
+    [0x00,0xF8,0x18,0x18,0x18,0x18,0xF8,0x00],
+    [0x38,0x6C,0x00,0x00,0x00,0x00,0x00,0x00],
+    [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFE],
+    [0x30,0x18,0x00,0x00,0x00,0x00,0x00,0x00],
+    [0x00,0x00,0x00,0x7A,0xCC,0xCC,0x76,0x00],
+    [0x00,0xE0,0x60,0x7C,0x66,0x66,0xDC,0x00],
+    [0x00,0x00,0x00,0x3C,0x60,0x60,0x3C,0x00],
+    [0x00,0x1C,0x0C,0x7C,0xCC,0xCC,0x76,0x00],
+    [0x00,0x00,0x00,0x78,0xCC,0xFC,0x60,0x30],
+    [0x00,0x3C,0x66,0xF0,0x60,0x60,0xF0,0x00],
+    [0x00,0x00,0x00,0x76,0xCC,0x7C,0x0C,0x78],
+    [0x00,0xE0,0x60,0x6C,0x76,0x66,0xE6,0x00],
+    [0x00,0x30,0x00,0x70,0x30,0x30,0x38,0x00],
+    [0x00,0x18,0x00,0x38,0x18,0x18,0x18,0x70],
+    [0x00,0xE0,0x60,0x6C,0x78,0x6C,0xE6,0x00],
+    [0x00,0x70,0x30,0x30,0x30,0x30,0x38,0x00],
+    [0x00,0x00,0x00,0xEC,0xD6,0xD6,0xC6,0x00],
+    [0x00,0x00,0x00,0xDC,0x76,0x66,0x66,0x00],
+    [0x00,0x00,0x00,0x78,0xCC,0xCC,0x78,0x00],
+    [0x00,0x00,0x00,0xDC,0x66,0x7C,0x60,0xF0],
+    [0x00,0x00,0x00,0x76,0xCC,0x7C,0x0C,0x1E],
+    [0x00,0x00,0x00,0xDC,0x66,0x60,0xF0,0x00],
+    [0x00,0x00,0x38,0x60,0x38,0x0C,0x78,0x00],
+    [0x00,0x00,0x60,0xF8,0x60,0x6C,0x38,0x00],
+    [0x00,0x00,0x00,0xCC,0xCC,0xCC,0x76,0x00],
+    [0x00,0x00,0x00,0xC6,0x6C,0x38,0x10,0x00],
+    [0x00,0x00,0x00,0xC6,0xD6,0xD6,0x6C,0x00],
+    [0x00,0x00,0x00,0xCC,0x78,0x78,0xCC,0x00],
+    [0x00,0x00,0x00,0xCC,0xCC,0x7C,0x0C,0x78],
+    [0x00,0x00,0x00,0x7C,0x18,0x30,0x7C,0x00],
+    [0x00,0x1C,0x30,0xE0,0x30,0x30,0x1C,0x00],
+    [0x00,0x30,0x30,0x30,0x30,0x30,0x30,0x00],
+    [0x00,0x70,0x18,0x0E,0x18,0x18,0x70,0x00],
+    [0x76,0xDC,0x00,0x00,0x00,0x00,0x00,0x00],
+    [0x00,0x10,0x38,0x6C,0x6C,0xC6,0xFE,0x00],
+];
+
 pub const KEY_NAMES: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
 
 pub const SCALE_NAMES: [&str; 9] = [
     "N/A",
-    "MAJOR",
-    "MINOR",
-    "PENTA",
-    "DORIAN",
-    "MIXO",
-    "WHOLE",
-    "HIRAJOSHI",
-    "LYDIAN",
+    "Major",
+    "Minor",
+    "Penta",
+    "Dorian",
+    "Mixo",
+    "Whole",
+    "Hirajoshi",
+    "Lydian",
 ];
 
 pub const BANK_NAMES: [&str; 4] = ["A", "B", "C", "D"];
@@ -46,9 +176,9 @@ pub enum VideoStatus {
 impl VideoStatus {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Off => "OFF",
-            Self::On => "ON",
-            Self::NoHdmi => "NO HDMI",
+            Self::Off => "Off",
+            Self::On => "On",
+            Self::NoHdmi => "No HDMI",
         }
     }
 }
@@ -68,6 +198,7 @@ pub struct MenuState {
     pub osc_count: usize,
     pub gr_voices: usize,
     pub video_status: VideoStatus,
+    pub glide_progress: Option<f32>,
     pub selected_item: usize,
     pub scroll_offset: usize,
 }
@@ -88,6 +219,7 @@ impl MenuState {
             osc_count,
             gr_voices,
             video_status: VideoStatus::Off,
+            glide_progress: None,
             selected_item: 0,
             scroll_offset: 0,
         }
@@ -98,7 +230,7 @@ impl MenuState {
     }
 
     pub fn total_items(&self) -> usize {
-        13
+        14
     }
 
     pub fn apply_button(&mut self, button: Button) {
@@ -183,19 +315,23 @@ impl MenuState {
 
     pub fn lines(&self) -> Vec<String> {
         vec![
-            format!("WAVETABLE: {}", if self.oscillators_active { "ON" } else { "OFF" }),
-            format!("GRANULAR: {}", if self.granular_active { "ON" } else { "OFF" }),
-            format!("KEY: {}", self.key_name()),
-            format!("SCALE: {}", SCALE_NAMES[self.scale_index]),
-            format!("OCTAVE: {}", self.octave),
-            format!("STEREO: {}", self.stereo_spread),
-            format!("WT BANK: {}", BANK_NAMES[self.bank_index]),
-            format!("WT VOL: {}", self.wt_volume),
-            format!("GR VOL: {}", self.gr_volume),
-            format!("CENTS: {:+}", self.fine_tune_cents as i32),
-            format!("WT OSCS: {}", self.osc_count),
-            format!("GR VOICES: {}", self.gr_voices),
-            format!("VIDEO: {}", self.video_status.as_str()),
+            format!("Wavetable: {}", if self.oscillators_active { "On" } else { "Off" }),
+            format!("Granular: {}", if self.granular_active { "On" } else { "Off" }),
+            format!("Key: {}", self.key_name()),
+            format!("Scale: {}", SCALE_NAMES[self.scale_index]),
+            format!("Octave: {}", self.octave),
+            format!("Stereo: {}", self.stereo_spread),
+            format!("WT Bank: {}", BANK_NAMES[self.bank_index]),
+            format!("WT Vol: {}", self.wt_volume),
+            format!("GR Vol: {}", self.gr_volume),
+            format!("Cents: {:+}", self.fine_tune_cents as i32),
+            format!("WT Oscs: {}", self.osc_count),
+            format!("GR Voices: {}", self.gr_voices),
+            format!("Video: {}", self.video_status.as_str()),
+            format!("Glide: {}", match self.glide_progress {
+                None => "---".to_string(),
+                Some(p) => format!("{}%", (p * 100.0) as u32),
+            }),
         ]
     }
 }
@@ -317,7 +453,7 @@ impl St7789Display {
 
         let mut fb = Framebuffer::new(240, 240);
         fb.clear(0x0000);
-        fb.draw_text(8, 8, "PIRATE SYNTH", 0xFFFF, 0x0000);
+        fb.draw_text(8, 8, "Pirate Synth", 0xFFFF, 0x0000);
 
         for (index, line) in state.lines().iter().enumerate() {
             if index >= state.scroll_offset && index < state.scroll_offset + VISIBLE_ROWS {
@@ -354,7 +490,7 @@ impl St7789Display {
 
         let mut fb = Framebuffer::new(240, 240);
         fb.clear(0x0000);
-        fb.draw_text(8, 8, "PIRATE SYNTH", 0xFFFF, 0x0000);
+        fb.draw_text(8, 8, "Pirate Synth", 0xFFFF, 0x0000);
         for (index, line) in state.lines().iter().enumerate() {
             if index >= state.scroll_offset && index < state.scroll_offset + VISIBLE_ROWS {
                 let visual_row = index - state.scroll_offset;
@@ -367,6 +503,83 @@ impl St7789Display {
             }
         }
         fb.save_ppm(path)
+    }
+
+    pub fn draw_idle_screen(&mut self, state: &MenuState) -> Result<()> {
+        let tmp = std::path::PathBuf::from("/tmp/pirate-synth-idle.ppm");
+        // Render to a temporary PPM first (reuses idle renderer), then convert to framebuffer.
+        // For now, render directly using the same logic.
+        let mut fb = Framebuffer::new(240, 240);
+        fb.clear(0x0000);
+
+        let key = state.key_name();
+        let key_chars = key.chars().count();
+        let key_total_w = key_chars as i32 * 32;
+        let key_x = (240 - key_total_w) / 2;
+        fb.draw_text_4x(key_x, 10, key, 0xFFFF, 0x0000);
+
+        let octave_str = format!("{}", state.octave);
+        let octave_x = key_x + key_total_w + 4;
+        fb.draw_text_2x(octave_x, 28, &octave_str, 0x07E0, 0x0000);
+
+        let scale = SCALE_NAMES[state.scale_index];
+        let scale_w = scale.chars().count() as i32 * 16;
+        let scale_x = (240 - scale_w) / 2;
+        fb.draw_text_2x(scale_x, 58, scale, 0xAD55, 0x0000);
+
+        let bar_max_h = 80i32;
+        let bar_w = 50i32;
+        let bar_top = 90i32;
+
+        let wt_color: u16 = if state.oscillators_active { 0x07E0 } else { 0x2945 };
+        let wt_bar_h = (bar_max_h * state.wt_volume as i32 / 100).max(2);
+        let wt_x = 35i32;
+        fb.fill_rect(wt_x, bar_top, bar_w, bar_max_h, 0x1084);
+        fb.fill_rect(wt_x, bar_top + (bar_max_h - wt_bar_h), bar_w, wt_bar_h, wt_color);
+        fb.draw_text_2x(wt_x + 9, bar_top + bar_max_h + 4, "WT", if state.oscillators_active { 0x07E0 } else { 0x8410 }, 0x0000);
+        let wt_vol_str = format!("{:3}", state.wt_volume);
+        fb.draw_text(wt_x + 9, bar_top + bar_max_h + 22, &wt_vol_str, 0xFFFF, 0x0000);
+
+        let gr_color: u16 = if state.granular_active { 0x001F } else { 0x2945 };
+        let gr_bar_h = (bar_max_h * state.gr_volume as i32 / 100).max(2);
+        let gr_x = 155i32;
+        fb.fill_rect(gr_x, bar_top, bar_w, bar_max_h, 0x1084);
+        fb.fill_rect(gr_x, bar_top + (bar_max_h - gr_bar_h), bar_w, gr_bar_h, gr_color);
+        fb.draw_text_2x(gr_x + 9, bar_top + bar_max_h + 4, "GR", if state.granular_active { 0x001F } else { 0x8410 }, 0x0000);
+        let gr_vol_str = format!("{:3}", state.gr_volume);
+        fb.draw_text(gr_x + 9, bar_top + bar_max_h + 22, &gr_vol_str, 0xFFFF, 0x0000);
+
+        let wave_color: u16 = if state.oscillators_active || state.granular_active { 0x4208 } else { 0x2104 };
+        let wave_y_center = 195i32;
+        for x in 0..240usize {
+            let t = x as f32 * std::f32::consts::TAU / 240.0 * 2.5;
+            let y_off = (t.sin() * 14.0) as i32;
+            let y_px = wave_y_center + y_off;
+            if y_px >= 0 && y_px < 239 {
+                fb.set_pixel(x, y_px as usize, wave_color);
+                fb.set_pixel(x, (y_px + 1) as usize, wave_color);
+            }
+        }
+
+        fb.draw_text(44, 226, "Press any key", 0x4208, 0x0000);
+
+        let _ = tmp; // suppress unused warning
+        self.command(0x2A, &[0x00, 0x00, 0x00, 0xEF])?;
+        self.command(0x2B, &[0x00, 0x00, 0x00, 0xEF])?;
+        self.dc.set_low();
+        self.spi
+            .write(&[0x2C])
+            .map(|_| ())
+            .context("failed writing ST7789 RAMWR command")?;
+        self.dc.set_high();
+        let bytes = fb.to_bytes();
+        write_in_chunks(&bytes, SPI_FRAMEBUFFER_CHUNK_SIZE, |chunk| {
+            self.spi
+                .write(chunk)
+                .map(|_| ())
+                .context("failed writing ST7789 idle screen framebuffer chunk")
+        })?;
+        Ok(())
     }
 }
 
@@ -449,10 +662,12 @@ impl Framebuffer {
     }
 
     fn draw_char(&mut self, x: i32, y: i32, ch: char, fg: u16, bg: u16) {
-        if let Some(glyph) = font8x8::BASIC_FONTS.get(ch) {
+        let idx = ch as usize;
+        if idx < FONT_DATA.len() {
+            let glyph = &FONT_DATA[idx];
             for (row, bits) in glyph.iter().enumerate() {
                 for col in 0..8 {
-                    let color = if (bits >> col) & 1 == 1 { fg } else { bg };
+                    let color = if (bits >> (7 - col)) & 1 == 1 { fg } else { bg };
                     let px = x + col;
                     let py = y + row as i32;
                     if px >= 0
@@ -464,6 +679,72 @@ impl Framebuffer {
                     }
                 }
             }
+        }
+    }
+
+    fn draw_char_2x(&mut self, x: i32, y: i32, ch: char, fg: u16, bg: u16) {
+        let idx = ch as usize;
+        if idx < FONT_DATA.len() {
+            let glyph = &FONT_DATA[idx];
+            for (row, bits) in glyph.iter().enumerate() {
+                for col in 0..8i32 {
+                    let color = if (bits >> (7 - col)) & 1 == 1 { fg } else { bg };
+                    let px = x + col * 2;
+                    let py = y + row as i32 * 2;
+                    for dy in 0..2i32 {
+                        for dx in 0..2i32 {
+                            let fpx = px + dx;
+                            let fpy = py + dy;
+                            if fpx >= 0
+                                && fpy >= 0
+                                && (fpx as usize) < self.width
+                                && (fpy as usize) < self.height
+                            {
+                                self.set_pixel(fpx as usize, fpy as usize, color);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw_text_2x(&mut self, x: i32, y: i32, text: &str, fg: u16, bg: u16) {
+        for (idx, ch) in text.chars().enumerate() {
+            self.draw_char_2x(x + (idx as i32 * 16), y, ch, fg, bg);
+        }
+    }
+
+    fn draw_char_4x(&mut self, x: i32, y: i32, ch: char, fg: u16, bg: u16) {
+        let idx = ch as usize;
+        if idx < FONT_DATA.len() {
+            let glyph = &FONT_DATA[idx];
+            for (row, bits) in glyph.iter().enumerate() {
+                for col in 0..8i32 {
+                    let color = if (bits >> (7 - col)) & 1 == 1 { fg } else { bg };
+                    let px = x + col * 4;
+                    let py = y + row as i32 * 4;
+                    for dy in 0..4i32 {
+                        for dx in 0..4i32 {
+                            let fpx = px + dx;
+                            let fpy = py + dy;
+                            if fpx >= 0
+                                && fpy >= 0
+                                && (fpx as usize) < self.width
+                                && (fpy as usize) < self.height
+                            {
+                                self.set_pixel(fpx as usize, fpy as usize, color);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw_text_4x(&mut self, x: i32, y: i32, text: &str, fg: u16, bg: u16) {
+        for (idx, ch) in text.chars().enumerate() {
+            self.draw_char_4x(x + (idx as i32 * 32), y, ch, fg, bg);
         }
     }
 
@@ -497,6 +778,212 @@ impl Framebuffer {
     }
 }
 
+/// Render two mockup frames showing the proposed UI redesign to PPM files in `dir`.
+/// Screen 1: top of list, item 0 selected.
+/// Screen 2: scrolled down, item 10 (WT OSCS) selected.
+pub fn draw_redesign_mockups_ppm(dir: &std::path::Path) -> Result<()> {
+    let state = MenuState {
+        key_index: 9,          // A
+        octave: 1,
+        fine_tune_cents: 0.0,
+        stereo_spread: 100,
+        scale_index: 7,        // HIRAJOSHI
+        bank_index: 0,
+        wt_volume: 50,
+        gr_volume: 50,
+        oscillators_active: true,
+        granular_active: false,
+        osc_count: 8,
+        gr_voices: 8,
+        video_status: VideoStatus::Off,
+        glide_progress: None,
+        selected_item: 0,
+        scroll_offset: 0,
+    };
+
+    // Screen 1: cursor at item 0, no scroll
+    render_redesign_frame_to_ppm(
+        &state,
+        0,
+        0,
+        &dir.join("redesign-screen1-top.ppm"),
+    )?;
+
+    // Screen 2: cursor at item 10 (WT OSCS), scrolled (scroll_offset=1)
+    render_redesign_frame_to_ppm(
+        &state,
+        10,
+        1,
+        &dir.join("redesign-screen2-scrolled.ppm"),
+    )?;
+
+    // Screen 3: idle overview screen
+    render_idle_screen_to_ppm(
+        &state,
+        &dir.join("redesign-screen3-idle.ppm"),
+    )?;
+
+    Ok(())
+}
+
+fn render_redesign_frame_to_ppm(
+    state: &MenuState,
+    selected_item: usize,
+    scroll_offset: usize,
+    path: &std::path::Path,
+) -> Result<()> {
+    const VISIBLE_ROWS: usize = 11;
+
+    let mut fb = Framebuffer::new(240, 240);
+    fb.clear(0x0000);
+
+    // ── Graphical header (no title, 26px) ─────────────────────────────────────
+    // Left block: WT status (green if ON, dark if OFF)
+    let wt_bg: u16 = if state.oscillators_active { 0x07E0 } else { 0x2945 };
+    let wt_fg: u16 = if state.oscillators_active { 0x0000 } else { 0xFFFF };
+    fb.fill_rect(0, 0, 116, 13, wt_bg);
+    fb.draw_text(3, 3, "WT", wt_fg, wt_bg);
+    let wt_state_str = if state.oscillators_active { "On " } else { "Off" };
+    fb.draw_text(22, 3, wt_state_str, wt_fg, wt_bg);
+    let wt_vol_str = format!("{:3}", state.wt_volume);
+    fb.draw_text(88, 3, &wt_vol_str, wt_fg, wt_bg);
+    // Volume bar (inside block, y=9, 2px tall)
+    let wt_bar_w = (70i32 * state.wt_volume as i32 / 100).max(1);
+    fb.fill_rect(48, 9, 70, 2, 0x0000); // track
+    fb.fill_rect(48, 9, wt_bar_w, 2, if state.oscillators_active { 0xFFFF } else { 0x8410 });
+
+    // Gap between blocks
+    fb.fill_rect(116, 0, 8, 13, 0x0000);
+
+    // Right block: GR status
+    let gr_bg: u16 = if state.granular_active { 0x001F } else { 0x2945 }; // blue if ON
+    let gr_fg: u16 = 0xFFFF;
+    fb.fill_rect(124, 0, 116, 13, gr_bg);
+    fb.draw_text(127, 3, "GR", gr_fg, gr_bg);
+    let gr_state_str = if state.granular_active { "On " } else { "Off" };
+    fb.draw_text(146, 3, gr_state_str, gr_fg, gr_bg);
+    let gr_vol_str = format!("{:3}", state.gr_volume);
+    fb.draw_text(212, 3, &gr_vol_str, gr_fg, gr_bg);
+    let gr_bar_w = (70i32 * state.gr_volume as i32 / 100).max(1);
+    fb.fill_rect(172, 9, 70, 2, 0x0000);
+    fb.fill_rect(172, 9, gr_bar_w, 2, if state.granular_active { 0xFFFF } else { 0x8410 });
+
+    // ── Key + Scale status line ───────────────────────────────────────────────
+    let key_octave = format!("{}{}", state.key_name(), state.octave);
+    let scale_name = SCALE_NAMES[state.scale_index];
+    let status = format!("{} {}", key_octave, scale_name);
+    fb.draw_text(4, 16, &status, 0xFFFF, 0x0000);
+
+    // ── Divider ───────────────────────────────────────────────────────────────
+    fb.fill_rect(0, 26, 240, 2, 0x4208);
+
+    // ── Items ─────────────────────────────────────────────────────────────────
+    let lines: Vec<String> = vec![
+        format!("{:<20}{:>9}", "Wavetable", if state.oscillators_active { "On" } else { "Off" }),
+        format!("{:<20}{:>9}", "Granular",  if state.granular_active    { "On" } else { "Off" }),
+        format!("{:<20}{:>9}", "Key",       state.key_name()),
+        format!("{:<20}{:>9}", "Octave",    state.octave),
+        format!("{:<20}{:>9}", "Scale",     SCALE_NAMES[state.scale_index]),
+        format!("{:<20}{:>9}", "WT Bank",   BANK_NAMES[state.bank_index]),
+        format!("{:<20}{:>9}", "WT Vol",    state.wt_volume),
+        format!("{:<20}{:>9}", "GR Vol",    state.gr_volume),
+        format!("{:<20}{:>9}", "Stereo",    state.stereo_spread),
+        format!("{:<20}{:>9}", "Cents",     format!("{:+}", state.fine_tune_cents as i32)),
+        format!("{:<20}{:>9}", "WT Oscs",   state.osc_count),
+        format!("{:<20}{:>9}", "GR Voices", state.gr_voices),
+        format!("{:<20}{:>9}", "Video",     state.video_status.as_str()),
+    ];
+
+    for (index, line) in lines.iter().enumerate() {
+        if index >= scroll_offset && index < scroll_offset + VISIBLE_ROWS {
+            let visual_row = index - scroll_offset;
+            let y = 30 + (visual_row as i32 * 18);
+            let selected = index == selected_item;
+            let bg = if selected { 0x07E0 } else { 0x0000 };
+            let fg = if selected { 0x0000 } else { 0xFFFF };
+            fb.fill_rect(2, y - 2, 236, 14, bg);
+            fb.draw_text(4, y, line, fg, bg);
+        }
+    }
+
+    fb.save_ppm(path)
+}
+
+/// Render the idle "at-a-glance" overview screen to a PPM file.
+pub fn draw_idle_screen_to_ppm(state: &MenuState, path: &std::path::Path) -> Result<()> {
+    render_idle_screen_to_ppm(state, path)
+}
+
+fn render_idle_screen_to_ppm(state: &MenuState, path: &std::path::Path) -> Result<()> {
+    let mut fb = Framebuffer::new(240, 240);
+    fb.clear(0x0000);
+
+    // ── Large key + octave ────────────────────────────────────────────────────
+    // Key at 4× (32px per char), centred
+    let key = state.key_name(); // e.g. "A", "C#"
+    let key_chars = key.chars().count();
+    let key_total_w = key_chars as i32 * 32;
+    let key_x = (240 - key_total_w) / 2;
+    fb.draw_text_4x(key_x, 10, key, 0xFFFF, 0x0000);
+
+    // Octave at 2× right of key
+    let octave_str = format!("{}", state.octave);
+    let octave_x = key_x + key_total_w + 4;
+    fb.draw_text_2x(octave_x, 28, &octave_str, 0x07E0, 0x0000); // green octave
+
+    // ── Scale name at 2× centred ──────────────────────────────────────────────
+    let scale = SCALE_NAMES[state.scale_index];
+    let scale_w = scale.chars().count() as i32 * 16;
+    let scale_x = (240 - scale_w) / 2;
+    fb.draw_text_2x(scale_x, 58, scale, 0xAD55, 0x0000); // muted cyan/teal
+
+    // ── Volume bars ───────────────────────────────────────────────────────────
+    // Each bar: 50px wide, up to 80px tall, vertical, fills from bottom
+    let bar_max_h = 80i32;
+    let bar_w = 50i32;
+    let bar_top = 90i32; // top of bar area
+
+    // WT bar (left side)
+    let wt_color: u16 = if state.oscillators_active { 0x07E0 } else { 0x2945 };
+    let wt_bar_h = (bar_max_h * state.wt_volume as i32 / 100).max(2);
+    let wt_x = 35i32;
+    fb.fill_rect(wt_x, bar_top, bar_w, bar_max_h, 0x1084); // track
+    fb.fill_rect(wt_x, bar_top + (bar_max_h - wt_bar_h), bar_w, wt_bar_h, wt_color);
+    // Label
+    fb.draw_text_2x(wt_x + 9, bar_top + bar_max_h + 4, "WT", if state.oscillators_active { 0x07E0 } else { 0x8410 }, 0x0000);
+    // Volume value
+    let wt_vol_str = format!("{:3}", state.wt_volume);
+    fb.draw_text(wt_x + 9, bar_top + bar_max_h + 22, &wt_vol_str, 0xFFFF, 0x0000);
+
+    // GR bar (right side)
+    let gr_color: u16 = if state.granular_active { 0x001F } else { 0x2945 }; // blue if ON
+    let gr_bar_h = (bar_max_h * state.gr_volume as i32 / 100).max(2);
+    let gr_x = 155i32;
+    fb.fill_rect(gr_x, bar_top, bar_w, bar_max_h, 0x1084);
+    fb.fill_rect(gr_x, bar_top + (bar_max_h - gr_bar_h), bar_w, gr_bar_h, gr_color);
+    fb.draw_text_2x(gr_x + 9, bar_top + bar_max_h + 4, "GR", if state.granular_active { 0x001F } else { 0x8410 }, 0x0000);
+    let gr_vol_str = format!("{:3}", state.gr_volume);
+    fb.draw_text(gr_x + 9, bar_top + bar_max_h + 22, &gr_vol_str, 0xFFFF, 0x0000);
+
+    // ── Sine wave ─────────────────────────────────────────────────────────────
+    let wave_color: u16 = if state.oscillators_active || state.granular_active { 0x4208 } else { 0x2104 };
+    let wave_y_center = 195i32;
+    for x in 0..240usize {
+        let t = x as f32 * std::f32::consts::TAU / 240.0 * 2.5;
+        let y_off = (t.sin() * 14.0) as i32;
+        let y_px = wave_y_center + y_off;
+        if y_px >= 0 && y_px < 239 {
+            fb.set_pixel(x, y_px as usize, wave_color);
+            fb.set_pixel(x, (y_px + 1) as usize, wave_color);
+        }
+    }
+
+    // ── "Press any key" ───────────────────────────────────────────────────────
+    fb.draw_text(44, 226, "Press any key", 0x4208, 0x0000); // dim white
+
+    fb.save_ppm(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,10 +996,10 @@ mod tests {
     }
 
     #[test]
-    fn menu_has_thirteen_items() {
+    fn menu_has_fourteen_items() {
         let menu = MenuState::new(0.0, 8, 8);
-        assert_eq!(menu.total_items(), 13);
-        assert_eq!(menu.lines().len(), 13);
+        assert_eq!(menu.total_items(), 14);
+        assert_eq!(menu.lines().len(), 14);
     }
 
     #[test]
@@ -550,29 +1037,61 @@ mod tests {
     fn menu_lines_correct_labels() {
         let menu = MenuState::new(0.0, 8, 8);
         let lines = menu.lines();
-        assert!(lines[0].starts_with("WAVETABLE:"), "line 0 should start with WAVETABLE:");
-        assert!(lines[1].starts_with("GRANULAR:"), "line 1 should start with GRANULAR:");
-        assert!(lines[2].starts_with("KEY:"), "line 2 should start with KEY:");
-        assert!(lines[3].starts_with("SCALE:"), "line 3 should start with SCALE:");
-        assert!(lines[4].starts_with("OCTAVE:"), "line 4 should start with OCTAVE:");
-        assert!(lines[5].starts_with("STEREO:"), "line 5 should start with STEREO:");
-        assert!(lines[6].starts_with("WT BANK:"), "line 6 should start with WT BANK:");
-        assert!(lines[7].starts_with("WT VOL:"), "line 7 should start with WT VOL:");
-        assert!(lines[8].starts_with("GR VOL:"), "line 8 should start with GR VOL:");
-        assert!(lines[9].starts_with("CENTS:"), "line 9 should start with CENTS:");
-        assert!(lines[10].starts_with("WT OSCS:"), "line 10 should start with WT OSCS:");
-        assert!(lines[11].starts_with("GR VOICES:"), "line 11 should start with GR VOICES:");
-        assert!(lines[12].starts_with("VIDEO:"), "line 12 should start with VIDEO:");
+        assert!(lines[0].starts_with("Wavetable:"), "line 0 should start with Wavetable:");
+        assert!(lines[1].starts_with("Granular:"), "line 1 should start with Granular:");
+        assert!(lines[2].starts_with("Key:"), "line 2 should start with Key:");
+        assert!(lines[3].starts_with("Scale:"), "line 3 should start with Scale:");
+        assert!(lines[4].starts_with("Octave:"), "line 4 should start with Octave:");
+        assert!(lines[5].starts_with("Stereo:"), "line 5 should start with Stereo:");
+        assert!(lines[6].starts_with("WT Bank:"), "line 6 should start with WT Bank:");
+        assert!(lines[7].starts_with("WT Vol:"), "line 7 should start with WT Vol:");
+        assert!(lines[8].starts_with("GR Vol:"), "line 8 should start with GR Vol:");
+        assert!(lines[9].starts_with("Cents:"), "line 9 should start with Cents:");
+        assert!(lines[10].starts_with("WT Oscs:"), "line 10 should start with WT Oscs:");
+        assert!(lines[11].starts_with("GR Voices:"), "line 11 should start with GR Voices:");
+        assert!(lines[12].starts_with("Video:"), "line 12 should start with Video:");
     }
 
     #[test]
     fn menu_video_line_reports_state() {
         let mut menu = MenuState::new(0.0, 8, 8);
-        assert_eq!(menu.lines()[12], "VIDEO: OFF");
+        assert_eq!(menu.lines()[12], "Video: Off");
         menu.video_status = VideoStatus::On;
-        assert_eq!(menu.lines()[12], "VIDEO: ON");
+        assert_eq!(menu.lines()[12], "Video: On");
+    }
+
+    #[test]
+    fn menu_glide_item_none_shows_dashes() {
+        let mut menu = MenuState::new(0.0, 4, 2);
+        menu.glide_progress = None;
+        let lines = menu.lines();
+        assert!(lines.iter().any(|l| l.contains("Glide: ---")));
+    }
+
+    #[test]
+    fn menu_glide_item_some_shows_percent() {
+        let mut menu = MenuState::new(0.0, 4, 2);
+        menu.glide_progress = Some(0.5);
+        let lines = menu.lines();
+        assert!(lines.iter().any(|l| l.contains("Glide: 50%")));
+    }
+
+    #[test]
+    fn glide_item_is_read_only() {
+        let mut menu = MenuState::new(0.0, 4, 2);
+        menu.selected_item = 13; // GLIDE item
+        let before = menu.lines();
+        menu.apply_button(Button::Select);
+        menu.apply_button(Button::Back);
+        assert_eq!(menu.lines(), before, "GLIDE item should be read-only");
+    }
+
+    #[test]
+    fn menu_total_items_is_14() {
+        let mut menu = MenuState::new(0.0, 4, 2);
+        assert_eq!(menu.total_items(), 14);
         menu.video_status = VideoStatus::NoHdmi;
-        assert_eq!(menu.lines()[12], "VIDEO: NO HDMI");
+        assert_eq!(menu.lines()[12], "Video: No HDMI");
     }
 
     #[test]

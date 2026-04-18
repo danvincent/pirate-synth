@@ -54,6 +54,7 @@ pub struct SynthController {
     bank_debounce: Debounce<Arc<[Wavetable]>>,
     note_transition_ms: f32,
     current_scale_mode: ScaleMode,
+    transition_start: Option<std::time::Instant>,
 }
 
 impl SynthController {
@@ -67,6 +68,7 @@ impl SynthController {
             bank_debounce: Debounce::new(debounce_ms),
             note_transition_ms: 0.0,
             current_scale_mode: ScaleMode::None,
+            transition_start: None,
         }
     }
 
@@ -74,10 +76,16 @@ impl SynthController {
 
     /// Change the played note (or MIDI pitch). Applies frequency glide if
     /// `note_transition_ms` > 0.
-    pub fn set_note_hz(&self, frequency_hz: f32) {
+    pub fn set_note_hz(&mut self, frequency_hz: f32) {
         if self.sender.send(AudioCommand::SetFrequencyHz(frequency_hz)).is_err() {
             eprintln!("[controller] audio channel disconnected");
         }
+        // Record transition start time for glide progress tracking
+        self.transition_start = if self.note_transition_ms > 0.0 {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
     }
 
     /// Set the glide duration for all note/scale/cents transitions.
@@ -86,6 +94,8 @@ impl SynthController {
         if self.sender.send(AudioCommand::SetNoteTransitionMs(self.note_transition_ms)).is_err() {
             eprintln!("[controller] audio channel disconnected");
         }
+        // Only set_note_hz() starts a glide. Changing duration alone does not start a glide.
+        self.transition_start = None;
     }
 
     /// Set the wavetable bank crossfade duration in seconds.
@@ -156,6 +166,21 @@ impl SynthController {
     pub fn note_transition_ms(&self) -> f32 {
         self.note_transition_ms
     }
+
+    /// Returns Some(progress 0.0..=1.0) while a glide is in progress, None otherwise.
+    pub fn transition_progress(&self) -> Option<f32> {
+        let start = self.transition_start?;
+        let ms = self.note_transition_ms;
+        if ms <= 0.0 {
+            return None;
+        }
+        let elapsed = start.elapsed().as_millis() as f32;
+        if elapsed >= ms {
+            None
+        } else {
+            Some((elapsed / ms).clamp(0.0, 1.0))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -170,7 +195,7 @@ mod tests {
 
     #[test]
     fn set_note_hz_sends_immediately() {
-        let (ctrl, rx) = make_controller(200);
+        let (mut ctrl, rx) = make_controller(200);
         ctrl.set_note_hz(440.0);
         let cmd = rx.try_recv().unwrap();
         assert!(matches!(cmd, AudioCommand::SetFrequencyHz(f) if (f - 440.0).abs() < 0.01));
@@ -288,5 +313,32 @@ mod tests {
             matches!(cmd2, AudioCommand::SetScale { mode: ScaleMode::Major, spread_percent } if (spread_percent - 50.0).abs() < 0.01),
             "scale spread should be updated to match new cents value"
         );
+    }
+
+    #[test]
+    fn transition_progress_none_when_ms_zero() {
+        let (mut ctrl, _rx) = make_controller(0);
+        ctrl.set_note_transition_ms(0.0);
+        ctrl.set_note_hz(440.0);
+        assert!(ctrl.transition_progress().is_none());
+    }
+
+    #[test]
+    fn transition_progress_some_immediately_after_note_set() {
+        let (mut ctrl, _rx) = make_controller(0);
+        ctrl.set_note_transition_ms(5000.0);
+        ctrl.set_note_hz(440.0);
+        let p = ctrl.transition_progress();
+        assert!(p.is_some(), "expected Some progress");
+        assert!(p.unwrap() < 0.1, "progress should be near 0 immediately after note set");
+    }
+
+    #[test]
+    fn transition_progress_none_after_completion() {
+        let (mut ctrl, _rx) = make_controller(0);
+        ctrl.set_note_transition_ms(1.0); // 1ms — will complete almost immediately
+        ctrl.set_note_hz(440.0);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        assert!(ctrl.transition_progress().is_none(), "should be None after glide completes");
     }
 }

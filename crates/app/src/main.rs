@@ -931,6 +931,7 @@ fn main() -> Result<()> {
         }
 
         synth.poll();
+        menu.glide_progress = synth.transition_progress();
         std::thread::sleep(Duration::from_millis(25));
 
         if args.iter().any(|arg| arg == "--oneshot") {
