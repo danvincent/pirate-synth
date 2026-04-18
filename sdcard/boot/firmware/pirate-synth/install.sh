@@ -73,8 +73,10 @@ if (( ${#installed_purge_candidates[@]} > 0 )); then
 fi
 apt-get clean
 
-# Drop offline documentation and locale data not removed by purge.
-rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
+# Drop offline documentation while preserving package copyright/license texts.
+find /usr/share/doc -mindepth 1 -type f ! -name copyright -delete
+find /usr/share/doc -depth -type d -empty -delete
+rm -rf /usr/share/locale/*
 
 install -m 0755 "$BOOT_DIR/bin/pirate_synth" /usr/local/bin/pirate_synth
 install -m 0644 "$BOOT_DIR/config/config.toml" /etc/pirate-synth/config.toml
