@@ -154,6 +154,7 @@ name = "controller"
 version = "0.1.0"
 dependencies = [
  "audio_alsa",
+ "crossbeam-channel",
  "engine",
 ]
 
@@ -403,6 +404,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "audio_alsa",
+ "controller",
  "crossbeam-channel",
  "engine",
  "env_logger",

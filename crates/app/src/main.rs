@@ -1,10 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use audio_alsa::{command_channel, spawn_audio_thread, AudioCommand, AudioConfig};
+use controller::SynthController;
 use crossbeam_channel::{bounded, Receiver};
 use engine::{
     key_to_frequency_hz, load_wav_sources, load_wavetables, Engine, GranularConfig, ScaleMode,
@@ -87,6 +87,9 @@ struct AppConfig {
     // Transition duration in seconds for cents/scale/bank changes
     #[serde(default = "default_transition_secs")]
     transition_secs: f32,
+    /// Glide duration in milliseconds for note/scale/cents changes. 0 = snap.
+    #[serde(default)]
+    note_transition_ms: f32,
     // Oscillators
     #[serde(default = "default_oscillators_active")]
     oscillators_active: bool,
@@ -270,6 +273,7 @@ impl Default for AppConfig {
             bank_index: 0,
             volume: default_volume(),
             transition_secs: default_transition_secs(),
+            note_transition_ms: 0.0,
             oscillators_active: false,
             granular_grain_size_ms: default_granular_grain_size_ms(),
             granular_density_hz: default_granular_density_hz(),
@@ -337,6 +341,7 @@ struct UserConfig {
     bank_index: Option<usize>,
     volume: Option<u8>,
     transition_secs: Option<f32>,
+    note_transition_ms: Option<f32>,
     oscillators_active: Option<bool>,
     granular_grain_size_ms: Option<f32>,
     granular_density_hz: Option<f32>,
@@ -404,6 +409,7 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         bank_index: user.bank_index.unwrap_or(base.bank_index),
         volume: user.volume.unwrap_or(base.volume),
         transition_secs: user.transition_secs.unwrap_or(base.transition_secs),
+        note_transition_ms: user.note_transition_ms.unwrap_or(base.note_transition_ms),
         oscillators_active: user.oscillators_active.unwrap_or(base.oscillators_active),
         granular_grain_size_ms: user
             .granular_grain_size_ms
@@ -746,6 +752,8 @@ fn main() -> Result<()> {
     info!("initial frequency set to {:.2} Hz", initial_hz);
 
     let (audio_tx, audio_rx) = command_channel();
+    let mut synth = SynthController::new(audio_tx.clone(), 200);
+    synth.set_note_transition_ms(config.note_transition_ms);
     info!("starting ALSA audio thread");
     let audio_handle = spawn_audio_thread(
         engine,
@@ -777,11 +785,6 @@ fn main() -> Result<()> {
     display.draw_menu(&menu)?;
     info!("startup complete");
 
-    const DEBOUNCE: Duration = Duration::from_millis(200);
-    let mut pending_cents: Option<(f32, Instant)> = None;
-    let mut pending_scale: Option<(usize, Instant)> = None;
-    let mut pending_bank: Option<(usize, Instant)> = None;
-
     const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
     let mut last_activity = Instant::now();
     let mut idle_mode = false;
@@ -806,9 +809,7 @@ fn main() -> Result<()> {
                             menu.octave = next_octave;
                             display.draw_menu(&menu)?;
                             let hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
-                            if let Err(err) = audio_tx.try_send(AudioCommand::SetFrequencyHz(hz)) {
-                                warn!("failed to send MIDI note frequency update: {err}");
-                            }
+                            synth.set_note_hz(hz);
                         }
                     }
                     MidiEvent::ControlChange { controller, value } => {
@@ -817,7 +818,7 @@ fn main() -> Result<()> {
                             let cents = midi_cc_to_cents(value);
                             if (menu.fine_tune_cents - cents).abs() >= 0.01 {
                                 menu.fine_tune_cents = cents;
-                                pending_cents = Some((menu.fine_tune_cents, Instant::now()));
+                                synth.stage_fine_tune_cents(menu.fine_tune_cents);
                             }
                         }
                     }
@@ -855,13 +856,11 @@ fn main() -> Result<()> {
 
             if menu.key_name() != old_key || menu.octave != old_octave {
                 let hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetFrequencyHz(hz)) {
-                    warn!("failed to send frequency update to audio thread: {err}");
-                }
+                synth.set_note_hz(hz);
             }
 
             if menu.fine_tune_cents != old_cents {
-                pending_cents = Some((menu.fine_tune_cents, Instant::now()));
+                synth.stage_fine_tune_cents(menu.fine_tune_cents);
             }
 
             if menu.stereo_spread != old_spread {
@@ -873,11 +872,15 @@ fn main() -> Result<()> {
             }
 
             if menu.scale_index != old_scale {
-                pending_scale = Some((menu.scale_index, Instant::now()));
+                synth.stage_scale(scale_mode_from_index(menu.scale_index), menu.fine_tune_cents);
             }
 
             if menu.bank_index != old_bank {
-                pending_bank = Some((menu.bank_index, Instant::now()));
+                let bank_name = ui::BANK_NAMES.get(menu.bank_index).copied().unwrap_or("A");
+                match load_bank(&config.wavetable_dir, bank_name, config.oscillators) {
+                    Ok(tables) => synth.stage_bank(std::sync::Arc::from(tables)),
+                    Err(err) => warn!("failed to load wavetable bank {bank_name}: {err}"),
+                }
             }
 
             if menu.wt_volume != old_wt_volume {
@@ -927,51 +930,7 @@ fn main() -> Result<()> {
             }
         }
 
-        // Flush debounced changes to audio thread
-        let now = Instant::now();
-        if let Some((cents, since)) = pending_cents {
-            if now.duration_since(since) >= DEBOUNCE {
-                display.draw_menu(&menu)?;
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetFineTuneCents(cents)) {
-                    warn!("failed to send fine tune cents to audio thread: {err}");
-                }
-                // Also resend scale since spread_percent ties to cents
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
-                    mode: scale_mode_from_index(menu.scale_index),
-                    spread_percent: cents,
-                }) {
-                    warn!("failed to send scale update to audio thread: {err}");
-                }
-                pending_cents = None;
-            }
-        }
-        if let Some((scale_idx, since)) = pending_scale {
-            if now.duration_since(since) >= DEBOUNCE {
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetScale {
-                    mode: scale_mode_from_index(scale_idx),
-                    spread_percent: menu.fine_tune_cents,
-                }) {
-                    warn!("failed to send scale update to audio thread: {err}");
-                }
-                pending_scale = None;
-            }
-        }
-        if let Some((bank_idx, since)) = pending_bank {
-            if now.duration_since(since) >= DEBOUNCE {
-                let bank_name = ui::BANK_NAMES.get(bank_idx).copied().unwrap_or("A");
-                match load_bank(&config.wavetable_dir, bank_name, config.oscillators) {
-                    Ok(tables) => {
-                        if let Err(err) =
-                            audio_tx.try_send(AudioCommand::SetWavetableBank(Arc::from(tables)))
-                        {
-                            warn!("failed to send wavetable bank to audio thread: {err}");
-                        }
-                    }
-                    Err(err) => warn!("failed to load wavetable bank {bank_name}: {err}"),
-                }
-                pending_bank = None;
-            }
-        }
+        synth.poll();
         std::thread::sleep(Duration::from_millis(25));
 
         if args.iter().any(|arg| arg == "--oneshot") {
@@ -1081,5 +1040,29 @@ mod tests {
         assert_eq!(validate_midi_cc(0).unwrap(), 0);
         assert_eq!(validate_midi_cc(127).unwrap(), 127);
         assert!(validate_midi_cc(200).is_err());
+    }
+
+    #[test]
+    fn config_default_note_transition_ms_is_zero() {
+        let config = AppConfig::default();
+        assert_eq!(config.note_transition_ms, 0.0);
+    }
+
+    #[test]
+    fn config_note_transition_ms_roundtrip() {
+        let toml = "note_transition_ms = 2500.0\n";
+        let config: AppConfig = toml::from_str(toml).unwrap();
+        assert!((config.note_transition_ms - 2500.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn apply_user_config_overrides_note_transition_ms() {
+        let base = AppConfig::default();
+        let user = UserConfig {
+            note_transition_ms: Some(3000.0),
+            ..UserConfig::default()
+        };
+        let merged = apply_user_config(base, user);
+        assert!((merged.note_transition_ms - 3000.0).abs() < 0.01);
     }
 }

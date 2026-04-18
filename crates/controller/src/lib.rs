@@ -1,7 +1,7 @@
 use audio_alsa::AudioCommand;
+use crossbeam_channel::Sender;
 use engine::{ScaleMode, Wavetable};
 use std::sync::Arc;
-use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 /// Debounce state for a single parameter.
@@ -53,6 +53,7 @@ pub struct SynthController {
     scale_debounce: Debounce<ScaleParams>,
     bank_debounce: Debounce<Arc<[Wavetable]>>,
     note_transition_ms: f32,
+    current_scale_mode: ScaleMode,
 }
 
 impl SynthController {
@@ -65,6 +66,7 @@ impl SynthController {
             scale_debounce: Debounce::new(debounce_ms),
             bank_debounce: Debounce::new(debounce_ms),
             note_transition_ms: 0.0,
+            current_scale_mode: ScaleMode::None,
         }
     }
 
@@ -109,6 +111,7 @@ impl SynthController {
 
     /// Stage a scale change. Dispatched after debounce delay.
     pub fn stage_scale(&mut self, mode: ScaleMode, spread_percent: f32) {
+        self.current_scale_mode = mode;
         self.scale_debounce.stage(ScaleParams { mode, spread_percent });
     }
 
@@ -124,6 +127,13 @@ impl SynthController {
     pub fn poll(&mut self) {
         if let Some(cents) = self.cents_debounce.flush() {
             if self.sender.send(AudioCommand::SetFineTuneCents(cents)).is_err() {
+                eprintln!("[controller] audio channel disconnected");
+            }
+            // When cents change, also update scale spread to match
+            if self.sender.send(AudioCommand::SetScale {
+                mode: self.current_scale_mode,
+                spread_percent: cents,
+            }).is_err() {
                 eprintln!("[controller] audio channel disconnected");
             }
         }
@@ -151,10 +161,10 @@ impl SynthController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
+    use crossbeam_channel;
 
-    fn make_controller(debounce_ms: u64) -> (SynthController, std::sync::mpsc::Receiver<AudioCommand>) {
-        let (tx, rx) = mpsc::channel();
+    fn make_controller(debounce_ms: u64) -> (SynthController, crossbeam_channel::Receiver<AudioCommand>) {
+        let (tx, rx) = crossbeam_channel::bounded(64);
         (SynthController::new(tx, debounce_ms), rx)
     }
 
@@ -252,7 +262,31 @@ mod tests {
             matches!(cmd, AudioCommand::SetFineTuneCents(c) if (c - 99.0).abs() < 0.01),
             "only the latest staged value should be dispatched"
         );
+        // When cents change, SetScale is also sent for spread update
+        let cmd2 = rx.try_recv().unwrap();
+        assert!(matches!(cmd2, AudioCommand::SetScale { .. }), "SetScale should follow SetFineTuneCents");
         // No further commands in channel
-        assert!(rx.try_recv().is_err(), "only one command should have been sent");
+        assert!(rx.try_recv().is_err(), "only two commands should have been sent");
+    }
+
+    #[test]
+    fn cents_change_also_updates_scale_spread() {
+        let (mut ctrl, rx) = make_controller(0);
+        // Set scale first so current_scale_mode is non-None
+        ctrl.stage_scale(ScaleMode::Major, 0.0);
+        ctrl.poll();
+        let _ = rx.try_recv(); // consume the SetScale command
+
+        // Now change cents — should emit both SetFineTuneCents and SetScale
+        ctrl.stage_fine_tune_cents(50.0);
+        ctrl.poll();
+
+        let cmd1 = rx.try_recv().expect("expected SetFineTuneCents");
+        let cmd2 = rx.try_recv().expect("expected SetScale with updated spread");
+        assert!(matches!(cmd1, AudioCommand::SetFineTuneCents(c) if (c - 50.0).abs() < 0.01));
+        assert!(
+            matches!(cmd2, AudioCommand::SetScale { mode: ScaleMode::Major, spread_percent } if (spread_percent - 50.0).abs() < 0.01),
+            "scale spread should be updated to match new cents value"
+        );
     }
 }
