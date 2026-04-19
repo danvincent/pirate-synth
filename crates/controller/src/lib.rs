@@ -121,7 +121,6 @@ impl SynthController {
 
     /// Stage a scale change. Dispatched after debounce delay.
     pub fn stage_scale(&mut self, mode: ScaleMode, spread_percent: f32) {
-        self.current_scale_mode = mode;
         self.scale_debounce.stage(ScaleParams { mode, spread_percent });
     }
 
@@ -139,15 +138,18 @@ impl SynthController {
             if self.sender.send(AudioCommand::SetFineTuneCents(cents)).is_err() {
                 eprintln!("[controller] audio channel disconnected");
             }
-            // When cents change, also update scale spread to match
-            if self.sender.send(AudioCommand::SetScale {
-                mode: self.current_scale_mode,
-                spread_percent: cents,
-            }).is_err() {
-                eprintln!("[controller] audio channel disconnected");
+            // Only resend scale when a real scale mode is active
+            if self.current_scale_mode != ScaleMode::None {
+                if self.sender.send(AudioCommand::SetScale {
+                    mode: self.current_scale_mode,
+                    spread_percent: cents,
+                }).is_err() {
+                    eprintln!("[controller] audio channel disconnected");
+                }
             }
         }
         if let Some(params) = self.scale_debounce.flush() {
+            self.current_scale_mode = params.mode;
             if self.sender.send(AudioCommand::SetScale {
                 mode: params.mode,
                 spread_percent: params.spread_percent,
@@ -287,11 +289,8 @@ mod tests {
             matches!(cmd, AudioCommand::SetFineTuneCents(c) if (c - 99.0).abs() < 0.01),
             "only the latest staged value should be dispatched"
         );
-        // When cents change, SetScale is also sent for spread update
-        let cmd2 = rx.try_recv().unwrap();
-        assert!(matches!(cmd2, AudioCommand::SetScale { .. }), "SetScale should follow SetFineTuneCents");
-        // No further commands in channel
-        assert!(rx.try_recv().is_err(), "only two commands should have been sent");
+        // With current_scale_mode == ScaleMode::None (initial state), SetScale is not sent
+        assert!(rx.try_recv().is_err(), "only one command should be sent when scale mode is None");
     }
 
     #[test]

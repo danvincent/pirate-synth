@@ -165,7 +165,7 @@ impl MenuState {
             7 => self.wt_volume = self.wt_volume.saturating_sub(10),
             8 => self.gr_volume = self.gr_volume.saturating_sub(10),
             9 => self.fine_tune_cents = (self.fine_tune_cents - 1.0).max(-100.0),
-            10 => self.osc_count = (self.osc_count - 1).max(1),
+            10 => self.osc_count = self.osc_count.saturating_sub(1).max(1),
             11 => self.gr_voices = self.gr_voices.saturating_sub(1),
             _ => {}
         }

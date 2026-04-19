@@ -816,6 +816,8 @@ fn main() -> Result<()> {
                             if (menu.fine_tune_cents - cents).abs() >= 0.01 {
                                 menu.fine_tune_cents = cents;
                                 synth.stage_fine_tune_cents(menu.fine_tune_cents);
+                                redraw = true;
+                                redraw = true;
                             }
                         }
                     }

@@ -351,7 +351,7 @@ impl Engine {
         self.bank_blend_target = 1.0;
     }
 
-    /// Set the transition duration in seconds for cents, scale, and bank changes.
+    /// Set the transition duration in seconds for wavetable bank crossfades.
     pub fn set_transition_secs(&mut self, secs: f32) {
         self.transition_secs = secs.max(0.01);
     }
@@ -512,9 +512,14 @@ impl Engine {
                 // Restore original uniform 4-cent spread
                 for (i, osc) in self.oscillators.iter_mut().enumerate() {
                     let cents = (i as f32 - center) * 4.0;
-                    let jitter = 0.8 + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
                     osc.target_detune_ratio = 2.0f32.powf(cents / 1200.0);
-                    osc.detune_ramp_rate = 1.0 / ((self.note_transition_ms / 1000.0 * jitter).max(0.001) * self.sample_rate as f32);
+                    if self.note_transition_ms <= 0.0 {
+                        osc.detune_ratio = osc.target_detune_ratio;
+                        osc.detune_ramp_rate = 0.0;
+                    } else {
+                        let jitter = 0.8 + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
+                        osc.detune_ramp_rate = 1.0 / ((self.note_transition_ms / 1000.0 * jitter).max(0.001) * self.sample_rate as f32);
+                    }
                 }
             }
             _ => {
@@ -563,7 +568,12 @@ impl Engine {
 
                     let jitter = 0.8 + (lcg_next(&mut self.oscillators[i].rng_state) as f32 / u32::MAX as f32) * 0.4;
                     self.oscillators[i].target_detune_ratio = 2.0f32.powf(nearest_cents / 1200.0);
-                    self.oscillators[i].detune_ramp_rate = 1.0 / ((self.note_transition_ms / 1000.0 * jitter).max(0.001) * self.sample_rate as f32);
+                    if self.note_transition_ms <= 0.0 {
+                        self.oscillators[i].detune_ratio = self.oscillators[i].target_detune_ratio;
+                        self.oscillators[i].detune_ramp_rate = 0.0;
+                    } else {
+                        self.oscillators[i].detune_ramp_rate = 1.0 / ((self.note_transition_ms / 1000.0 * jitter).max(0.001) * self.sample_rate as f32);
+                    }
                 }
             }
         }

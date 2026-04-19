@@ -41,9 +41,9 @@ impl Framebuffer {
         if idx < FONT_DATA.len() {
             let glyph = &FONT_DATA[idx];
             for (row, bits) in glyph.iter().enumerate() {
-                for col in 0..8 {
+                for col in 0..8usize {
                     let color = if (bits >> (7 - col)) & 1 == 1 { fg } else { bg };
-                    let px = x + col;
+                    let px = x + col as i32;
                     let py = y + row as i32;
                     if px >= 0
                         && py >= 0
@@ -62,9 +62,9 @@ impl Framebuffer {
         if idx < FONT_DATA.len() {
             let glyph = &FONT_DATA[idx];
             for (row, bits) in glyph.iter().enumerate() {
-                for col in 0..8i32 {
+                for col in 0..8usize {
                     let color = if (bits >> (7 - col)) & 1 == 1 { fg } else { bg };
-                    let px = x + col * 2;
+                    let px = x + col as i32 * 2;
                     let py = y + row as i32 * 2;
                     for dy in 0..2i32 {
                         for dx in 0..2i32 {
@@ -95,9 +95,9 @@ impl Framebuffer {
         if idx < FONT_DATA.len() {
             let glyph = &FONT_DATA[idx];
             for (row, bits) in glyph.iter().enumerate() {
-                for col in 0..8i32 {
+                for col in 0..8usize {
                     let color = if (bits >> (7 - col)) & 1 == 1 { fg } else { bg };
-                    let px = x + col * 4;
+                    let px = x + col as i32 * 4;
                     let py = y + row as i32 * 4;
                     for dy in 0..4i32 {
                         for dx in 0..4i32 {
