@@ -158,9 +158,7 @@ impl St7789Display {
     }
 
     pub fn draw_idle_screen(&mut self, state: &MenuState) -> Result<()> {
-        let tmp = std::path::PathBuf::from("/tmp/pirate-synth-idle.ppm");
-        // Render to a temporary PPM first (reuses idle renderer), then convert to framebuffer.
-        // For now, render directly using the same logic.
+        // Render the idle screen directly into the framebuffer.
         let mut fb = Framebuffer::new(240, 240);
         fb.clear(0x0000);
 
