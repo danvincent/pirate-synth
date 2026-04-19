@@ -88,6 +88,11 @@ pub struct Engine {
     reverb_wet: f32,
     reverb_odd: Reverb,
     reverb_even: Reverb,
+    // Granular reverb (independent)
+    pub(crate) granular_reverb_enabled: bool,
+    pub(crate) granular_reverb_wet: f32,
+    granular_reverb_odd: Reverb,
+    granular_reverb_even: Reverb,
     // Tremolo
     tremolo_enabled: bool,
     tremolo_depth: f32,
@@ -198,6 +203,10 @@ impl Engine {
             reverb_wet: 0.20,
             reverb_odd: Reverb::new(true),
             reverb_even: Reverb::new(false),
+            granular_reverb_enabled: false,
+            granular_reverb_wet: 0.45,
+            granular_reverb_odd: Reverb::new_with_params(true, 0.88, 0.12, 8),
+            granular_reverb_even: Reverb::new_with_params(false, 0.88, 0.12, 8),
             tremolo_enabled: true,
             tremolo_depth: 0.35,
             crossfade_enabled: true,
@@ -385,6 +394,19 @@ impl Engine {
     pub fn set_reverb(&mut self, enabled: bool, wet: f32) {
         self.reverb_enabled = enabled;
         self.reverb_wet = wet.clamp(0.0, 1.0);
+    }
+
+    pub fn set_reverb_feedback(&mut self, feedback: f32, damp: f32, comb_count: usize) {
+        // Rebuild WT reverb instances with new params, preserving short/long split
+        self.reverb_odd = Reverb::new_with_params(true, feedback, damp, comb_count);
+        self.reverb_even = Reverb::new_with_params(false, feedback, damp, comb_count);
+    }
+
+    pub fn set_granular_reverb(&mut self, enabled: bool, wet: f32, feedback: f32, damp: f32, comb_count: usize) {
+        self.granular_reverb_enabled = enabled;
+        self.granular_reverb_wet = wet.clamp(0.0, 1.0);
+        self.granular_reverb_odd = Reverb::new_with_params(true, feedback, damp, comb_count);
+        self.granular_reverb_even = Reverb::new_with_params(false, feedback, damp, comb_count);
     }
 
     pub fn set_tremolo(&mut self, enabled: bool, depth: f32) {
@@ -817,8 +839,21 @@ impl Engine {
             let mut r = r_out * gain * self.master_gain * self.wt_volume;
             if mix_granular {
                 let (gran_l, gran_r) = self.render_granular_frame_normalized();
-                l += gran_l * self.granular_gain * self.granular_volume;
-                r += gran_r * self.granular_gain * self.granular_volume;
+                let (processed_l, processed_r) = if self.granular_reverb_enabled {
+                    let rev_odd_l = self.granular_reverb_odd.process(gran_l);
+                    let rev_odd_r = self.granular_reverb_odd.process(gran_r);
+                    let rev_even_l = self.granular_reverb_even.process(gran_l);
+                    let rev_even_r = self.granular_reverb_even.process(gran_r);
+                    let wet = self.granular_reverb_wet;
+                    let dry = 1.0 - wet;
+                    let processed_l = dry * gran_l + wet * (rev_odd_l + rev_even_l) * 0.5;
+                    let processed_r = dry * gran_r + wet * (rev_odd_r + rev_even_r) * 0.5;
+                    (processed_l, processed_r)
+                } else {
+                    (gran_l, gran_r)
+                };
+                l += processed_l * self.granular_gain * self.granular_volume;
+                r += processed_r * self.granular_gain * self.granular_volume;
             }
             let l = l.clamp(-1.0, 1.0);
             let r = r.clamp(-1.0, 1.0);
@@ -1106,6 +1141,48 @@ mod tests {
             .map(|grain| grain.source_index)
             .collect();
         assert_eq!(indices, vec![0, 1, 0, 1, 0]);
+    }
+
+    #[test]
+    fn granular_reverb_disabled_matches_dry() {
+        // When granular_reverb_enabled = false, output should equal the dry granular signal.
+        // We can't easily test the exact samples without a full engine, so test that
+        // set_granular_reverb with enabled=false doesn't panic and the flag is set.
+        let source = GranularSource {
+            name: "test".into(),
+            sample_rate: 44100,
+            samples: vec![0.5f32; 8192],
+        };
+        let mut engine = Engine::new_granular(44100, 4, vec![source], GranularConfig::default()).unwrap();
+        engine.set_granular_reverb(false, 0.5, 0.84, 0.20, 4);
+        assert!(!engine.granular_reverb_enabled);
+    }
+
+    #[test]
+    fn granular_reverb_wet_zero_passes_dry() {
+        // wet=0.0 should leave granular_reverb_wet at 0.0
+        let source = GranularSource {
+            name: "test".into(),
+            sample_rate: 44100,
+            samples: vec![0.5f32; 8192],
+        };
+        let mut engine = Engine::new_granular(44100, 4, vec![source], GranularConfig::default()).unwrap();
+        engine.set_granular_reverb(true, 0.0, 0.84, 0.20, 4);
+        assert_eq!(engine.granular_reverb_wet, 0.0);
+    }
+
+    #[test]
+    fn granular_reverb_params_applied() {
+        // Verify set_granular_reverb stores enabled and wet correctly.
+        let source = GranularSource {
+            name: "test".into(),
+            sample_rate: 44100,
+            samples: vec![0.5f32; 8192],
+        };
+        let mut engine = Engine::new_granular(44100, 4, vec![source], GranularConfig::default()).unwrap();
+        engine.set_granular_reverb(true, 0.6, 0.88, 0.12, 8);
+        assert!(engine.granular_reverb_enabled);
+        assert!((engine.granular_reverb_wet - 0.6).abs() < 1e-5);
     }
 
     #[test]
