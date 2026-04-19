@@ -46,6 +46,23 @@ struct AppConfig {
     reverb_enabled: bool,
     #[serde(default = "default_reverb_wet")]
     reverb_wet: f32,
+    #[serde(default = "default_reverb_feedback")]
+    reverb_feedback: f32,
+    #[serde(default = "default_reverb_damp")]
+    reverb_damp: f32,
+    #[serde(default = "default_reverb_comb_count")]
+    reverb_comb_count: usize,
+    // Granular reverb (independent)
+    #[serde(default = "default_granular_reverb_enabled")]
+    granular_reverb_enabled: bool,
+    #[serde(default = "default_granular_reverb_wet")]
+    granular_reverb_wet: f32,
+    #[serde(default = "default_granular_reverb_feedback")]
+    granular_reverb_feedback: f32,
+    #[serde(default = "default_granular_reverb_damp")]
+    granular_reverb_damp: f32,
+    #[serde(default = "default_granular_reverb_comb_count")]
+    granular_reverb_comb_count: usize,
     // Tremolo
     #[serde(default = "default_tremolo_enabled")]
     tremolo_enabled: bool,
@@ -156,6 +173,30 @@ fn default_reverb_enabled() -> bool {
 fn default_reverb_wet() -> f32 {
     0.20
 }
+fn default_reverb_feedback() -> f32 {
+    0.84
+}
+fn default_reverb_damp() -> f32 {
+    0.20
+}
+fn default_reverb_comb_count() -> usize {
+    4
+}
+fn default_granular_reverb_enabled() -> bool {
+    true
+}
+fn default_granular_reverb_wet() -> f32 {
+    0.45
+}
+fn default_granular_reverb_feedback() -> f32 {
+    0.88
+}
+fn default_granular_reverb_damp() -> f32 {
+    0.12
+}
+fn default_granular_reverb_comb_count() -> usize {
+    8
+}
 fn default_tremolo_enabled() -> bool {
     true
 }
@@ -257,6 +298,14 @@ impl Default for AppConfig {
             spi_device: default_spi_device(),
             reverb_enabled: default_reverb_enabled(),
             reverb_wet: default_reverb_wet(),
+            reverb_feedback: default_reverb_feedback(),
+            reverb_damp: default_reverb_damp(),
+            reverb_comb_count: default_reverb_comb_count(),
+            granular_reverb_enabled: default_granular_reverb_enabled(),
+            granular_reverb_wet: default_granular_reverb_wet(),
+            granular_reverb_feedback: default_granular_reverb_feedback(),
+            granular_reverb_damp: default_granular_reverb_damp(),
+            granular_reverb_comb_count: default_granular_reverb_comb_count(),
             tremolo_enabled: default_tremolo_enabled(),
             tremolo_depth: default_tremolo_depth(),
             crossfade_enabled: default_crossfade_enabled(),
@@ -325,6 +374,14 @@ struct UserConfig {
     spi_device: Option<String>,
     reverb_enabled: Option<bool>,
     reverb_wet: Option<f32>,
+    reverb_feedback: Option<f32>,
+    reverb_damp: Option<f32>,
+    reverb_comb_count: Option<usize>,
+    granular_reverb_enabled: Option<bool>,
+    granular_reverb_wet: Option<f32>,
+    granular_reverb_feedback: Option<f32>,
+    granular_reverb_damp: Option<f32>,
+    granular_reverb_comb_count: Option<usize>,
     tremolo_enabled: Option<bool>,
     tremolo_depth: Option<f32>,
     crossfade_enabled: Option<bool>,
@@ -389,6 +446,14 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         spi_device: user.spi_device.unwrap_or(base.spi_device),
         reverb_enabled: user.reverb_enabled.unwrap_or(base.reverb_enabled),
         reverb_wet: user.reverb_wet.unwrap_or(base.reverb_wet),
+        reverb_feedback: user.reverb_feedback.unwrap_or(base.reverb_feedback),
+        reverb_damp: user.reverb_damp.unwrap_or(base.reverb_damp),
+        reverb_comb_count: user.reverb_comb_count.unwrap_or(base.reverb_comb_count),
+        granular_reverb_enabled: user.granular_reverb_enabled.unwrap_or(base.granular_reverb_enabled),
+        granular_reverb_wet: user.granular_reverb_wet.unwrap_or(base.granular_reverb_wet),
+        granular_reverb_feedback: user.granular_reverb_feedback.unwrap_or(base.granular_reverb_feedback),
+        granular_reverb_damp: user.granular_reverb_damp.unwrap_or(base.granular_reverb_damp),
+        granular_reverb_comb_count: user.granular_reverb_comb_count.unwrap_or(base.granular_reverb_comb_count),
         tremolo_enabled: user.tremolo_enabled.unwrap_or(base.tremolo_enabled),
         tremolo_depth: user.tremolo_depth.unwrap_or(base.tremolo_depth),
         crossfade_enabled: user.crossfade_enabled.unwrap_or(base.crossfade_enabled),
@@ -453,6 +518,14 @@ fn apply_engine_params(engine: &mut Engine, menu: &MenuState, config: &AppConfig
     engine.set_fine_tune_cents(menu.fine_tune_cents);
     engine.set_stereo_spread(menu.stereo_spread);
     engine.set_reverb(config.reverb_enabled, config.reverb_wet);
+    engine.set_reverb_feedback(config.reverb_feedback, config.reverb_damp, config.reverb_comb_count);
+    engine.set_granular_reverb(
+        config.granular_reverb_enabled,
+        config.granular_reverb_wet,
+        config.granular_reverb_feedback,
+        config.granular_reverb_damp,
+        config.granular_reverb_comb_count,
+    );
     engine.set_tremolo(config.tremolo_enabled, config.tremolo_depth);
     engine.set_crossfade(config.crossfade_enabled, config.crossfade_rate);
     engine.set_filter_sweep(
@@ -816,7 +889,6 @@ fn main() -> Result<()> {
                             if (menu.fine_tune_cents - cents).abs() >= 0.01 {
                                 menu.fine_tune_cents = cents;
                                 synth.stage_fine_tune_cents(menu.fine_tune_cents);
-                                redraw = true;
                                 redraw = true;
                             }
                         }

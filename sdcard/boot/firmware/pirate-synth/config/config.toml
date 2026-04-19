@@ -1,47 +1,105 @@
-sample_rate = 6000
-buffer_frames = 256
-oscillators = 16
-root_key = "A"
-root_octave = 1
-fine_tune_cents = 50
-midi_cents_cc = 1
-wavetable_dir = "/var/lib/pirate-synth/wavetables"
-wav_dir = "/var/lib/pirate-synth/WAV"
-spi_device = "/dev/spidev0.1"
-hdmi_visuals_enabled = false
+# ─────────────────────────────────────────────────────────────────────────────
+# Pirate Synth — system configuration
+# Edit this file to tune the synthesiser for your environment and use case.
+# All values shown are defaults. Override any subset in ~/.pirate-synth.toml
+# ─────────────────────────────────────────────────────────────────────────────
 
-# Audio effects (all feature-flagged, safe to set false if CPU load too high)
-reverb_enabled = true
-reverb_wet = 0.33
-tremolo_enabled = true
-tremolo_depth = 0.35
-crossfade_enabled = true
-crossfade_rate = 0.05
-filter_sweep_enabled = true
-filter_sweep_min = 0.15
-filter_sweep_max = 0.80
-filter_sweep_rate_hz = 0.008
-fm_enabled = false
-fm_depth = 0.15
-subtractive_enabled = false
-subtractive_depth = 0.30
+# ── Audio hardware ────────────────────────────────────────────────────────────
+sample_rate   = 24000    # Hz — intentionally low for the hardware; 48000 for higher quality audio (more CPU)
+buffer_frames = 256     # ALSA buffer size; increase if you hear glitches
+spi_device    = "/dev/spidev0.1"
+
+# ── Root note ─────────────────────────────────────────────────────────────────
+root_key    = "A"   # C C# D D# E F F# G G# A A# B
+root_octave = 1     # 0–8
+fine_tune_cents = 50  # ±100 cents (100 cents = 1 semitone)
+
+# ── MIDI ──────────────────────────────────────────────────────────────────────
+midi_cents_cc = 1   # CC number used to sweep fine_tune_cents (mod wheel = 1)
+
+# ── Scale / oscillator spread ─────────────────────────────────────────────────
 # Scale mode: 0=N/A 1=MAJOR 2=MINOR 3=PENTA 4=DORIAN 5=MIXO 6=WHOLE 7=HIRAJOSHI 8=LYDIAN
-scale_index = 7
+scale_index    = 7
+stereo_spread  = 100  # 0–100 — how wide oscillators are spread across stereo field
+
+# ── Oscillators ───────────────────────────────────────────────────────────────
+oscillators       = 16      # Number of wavetable oscillators (1–64)
+oscillators_active = false  # Set true to start with WT oscillators on at boot
+wavetable_dir = "/var/lib/pirate-synth/wavetables"
 # Wavetable bank: 0=A 1=B 2=C 3=D
 bank_index = 3
-# Transition duration in seconds for cents, scale, and bank changes (±20% jitter applied)
-transition_secs = 30.0
-# Output volume 0-100 (applied instantly)
-volume = 100
 
-# Granular mode (auto-selected when WAV files exist in wav_dir)
-granular_grain_size_ms = 250.0
-granular_note_ms = 4000.0
-granular_density_hz = 4.0
-granular_max_overlap = 16
-granular_position = 0.1
-granular_position_jitter = 0.4
-granular_attack_ms = 500.0
-granular_release_ms = 500.0
-granular_spawn_jitter = 0.5
-granular_wavs = 8
+# ── Output ────────────────────────────────────────────────────────────────────
+volume = 100   # Master output volume 0–100
+
+# ── Transitions ───────────────────────────────────────────────────────────────
+# Duration in seconds over which cents, scale, and bank changes are smoothed (±20% per-osc jitter)
+transition_secs    = 30.0
+# Glide time in milliseconds for note/frequency changes. 0 = snap immediately.
+note_transition_ms = 0.0
+
+# ── Wavetable reverb ──────────────────────────────────────────────────────────
+# Reverb applied to the wavetable oscillator bus.
+reverb_enabled  = true
+reverb_wet      = 0.33  # 0.0 = dry, 1.0 = fully wet
+reverb_feedback = 0.84  # 0.0–0.97 — higher = longer tail; avoid ≥ 0.97 (feedback risk)
+reverb_damp     = 0.20  # 0.0–1.0 — higher = more high-frequency roll-off in the tail
+reverb_comb_count = 4   # 1–8 — more combs = denser reverb, higher CPU cost
+
+# ── Granular reverb ───────────────────────────────────────────────────────────
+# Independent reverb applied to the granular synthesis bus.
+# Higher feedback and comb count suit long drone textures.
+granular_reverb_enabled   = true
+granular_reverb_wet       = 0.45  # Recommend 0.40–0.60 for drone use
+granular_reverb_feedback  = 0.88  # Slightly longer tail than WT default
+granular_reverb_damp      = 0.12  # Darker tail — less high-frequency rolloff
+granular_reverb_comb_count = 8    # Full 8-comb Freeverb density
+
+# ── Tremolo ───────────────────────────────────────────────────────────────────
+# Slow amplitude modulation applied per oscillator at a randomised rate.
+tremolo_enabled = true
+tremolo_depth   = 0.05  # 0.0 = no tremolo, 1.0 = full depth (silence to full)
+
+# ── Wavetable crossfade ───────────────────────────────────────────────────────
+# Slowly cross-fades between adjacent wavetable frames for movement.
+crossfade_enabled = true
+crossfade_rate    = 0.05  # Higher = faster cycling through frames
+
+# ── Filter sweep ──────────────────────────────────────────────────────────────
+# Per-oscillator low-pass filter with an LFO-driven cutoff sweep.
+filter_sweep_enabled  = true
+filter_sweep_min      = 0.25   # Minimum cutoff (0.0–1.0 normalised)
+filter_sweep_max      = 0.50   # Maximum cutoff
+filter_sweep_rate_hz  = 0.008  # LFO rate in Hz — very slow for drone use
+
+# ── FM synthesis ──────────────────────────────────────────────────────────────
+# Even oscillators modulate odd oscillators for timbral complexity.
+fm_enabled = false
+fm_depth   = 0.05  # Modulation depth; above 0.30 becomes noticeably inharmonic
+
+# ── Subtractive mixing ────────────────────────────────────────────────────────
+# Reduces the level of even oscillators to thin the texture.
+subtractive_enabled = false
+subtractive_depth   = 0.30  # 0.0 = no effect, 1.0 = even oscillators silent
+
+# ── Granular synthesis ────────────────────────────────────────────────────────
+# Auto-selected when WAV files are present in wav_dir.
+wav_dir = "/var/lib/pirate-synth/WAV"
+
+granular_active       = false  # Set true to start with granular on at boot
+granular_wavs         = 8      # Number of WAV source files to use (voices)
+granular_volume       = 50     # Granular mix volume 0–100
+
+# Grain texture parameters
+granular_grain_size_ms     = 250.0  # ms — WAV window size per grain; longer = smoother texture
+granular_note_ms           = 4000.0 # ms — total grain lifespan before expiry
+granular_density_hz        = 4.0    # Grains spawned per second; higher = denser cloud
+granular_max_overlap       = 16     # Maximum simultaneously active grains
+granular_spawn_jitter      = 0.5    # 0.0–1.0 — timing randomness; 0.5 = ±50% interval
+granular_position          = 0.1    # 0.0–1.0 — read position in source WAV
+granular_position_jitter   = 0.4    # 0.0–1.0 — random offset applied each grain loop
+granular_attack_ms         = 500.0  # Grain fade-in time; longer = smoother onset
+granular_release_ms        = 500.0  # Grain fade-out time; longer = smoother release
+
+# ── Display ───────────────────────────────────────────────────────────────────
+hdmi_visuals_enabled = false  # Enable HDMI scope/visual output (DRM)
