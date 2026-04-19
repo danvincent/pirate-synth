@@ -793,6 +793,11 @@ fn main() -> Result<()> {
 
         if let Some(midi) = &midi {
             while let Ok(event) = midi.rx.try_recv() {
+                let mut redraw = false;
+                if idle_mode {
+                    idle_mode = false;
+                    redraw = true;
+                }
                 last_activity = Instant::now();
                 match event {
                     MidiEvent::NoteOn(note) => {
@@ -800,16 +805,13 @@ fn main() -> Result<()> {
                         if menu.key_index != next_key || menu.octave != next_octave {
                             menu.key_index = next_key;
                             menu.octave = next_octave;
-                            if !idle_mode {
-                                display.draw_redesign(&menu)?;
-                            }
+                            redraw = true;
                             let hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
                             synth.set_note_hz(hz);
                         }
                     }
                     MidiEvent::ControlChange { controller, value } => {
                         if controller == midi_cents_cc {
-                            last_activity = Instant::now();
                             let cents = midi_cc_to_cents(value);
                             if (menu.fine_tune_cents - cents).abs() >= 0.01 {
                                 menu.fine_tune_cents = cents;
@@ -817,6 +819,9 @@ fn main() -> Result<()> {
                             }
                         }
                     }
+                }
+                if redraw {
+                    display.draw_redesign(&menu)?;
                 }
             }
         }

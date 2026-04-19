@@ -213,7 +213,6 @@ impl St7789Display {
 
         fb.draw_text(44, 226, "Press any key", 0x4208, 0x0000);
 
-        let _ = tmp; // suppress unused warning
         self.command(0x2A, &[0x00, 0x00, 0x00, 0xEF])?;
         self.command(0x2B, &[0x00, 0x00, 0x00, 0xEF])?;
         self.dc.set_low();
