@@ -706,13 +706,6 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if args.iter().any(|arg| arg == "--render-mockup") {
-        let dir = PathBuf::from("/tmp");
-        ui::draw_redesign_mockups_ppm(&dir)?;
-        info!("rendered redesign mockups to /tmp/redesign-screen*.ppm");
-        return Ok(());
-    }
-
     let mut visuals_level_tx = None;
     if config.hdmi_visuals_enabled {
         match try_spawn_visuals() {
