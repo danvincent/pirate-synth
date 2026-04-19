@@ -782,7 +782,7 @@ fn main() -> Result<()> {
     info!("display initialized (DC=BCM9, backlight=BCM13)");
 
     info!("rendering initial menu frame");
-    display.draw_menu(&menu)?;
+    display.draw_redesign(&menu)?;
     info!("startup complete");
 
     const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -807,7 +807,7 @@ fn main() -> Result<()> {
                         if menu.key_index != next_key || menu.octave != next_octave {
                             menu.key_index = next_key;
                             menu.octave = next_octave;
-                            display.draw_menu(&menu)?;
+                            display.draw_redesign(&menu)?;
                             let hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
                             synth.set_note_hz(hz);
                         }
@@ -832,7 +832,7 @@ fn main() -> Result<()> {
             // If idle, any key wakes the display and resumes the menu
             if idle_mode {
                 idle_mode = false;
-                display.draw_menu(&menu)?;
+                display.draw_redesign(&menu)?;
                 std::thread::sleep(Duration::from_millis(25));
                 continue;
             }
@@ -852,7 +852,7 @@ fn main() -> Result<()> {
             let old_gr_voices = menu.gr_voices;
 
             menu.apply_button(button);
-            display.draw_menu(&menu)?;
+            display.draw_redesign(&menu)?;
 
             if menu.key_name() != old_key || menu.octave != old_octave {
                 let hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
