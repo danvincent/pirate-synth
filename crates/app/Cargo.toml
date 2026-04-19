@@ -15,6 +15,7 @@ toml.workspace = true
 crossbeam-channel = "0.5"
 midir = "0.10.3"
 audio_alsa = { path = "../audio_alsa" }
+controller = { path = "../controller" }
 engine = { path = "../engine" }
 ui = { path = "../ui" }
 visuals_drm = { path = "../visuals_drm" }

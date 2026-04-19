@@ -1,2 +1,6 @@
 [target.arm-unknown-linux-gnueabihf]
 linker = "arm-linux-gnueabihf-gcc"
+
+[env]
+PKG_CONFIG_SYSROOT_DIR_arm_unknown_linux_gnueabihf = "/"
+PKG_CONFIG_LIBDIR_arm_unknown_linux_gnueabihf = "/usr/lib/arm-linux-gnueabihf/pkgconfig"

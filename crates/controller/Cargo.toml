@@ -1,0 +1,9 @@
+[package]
+name = "controller"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+audio_alsa = { path = "../audio_alsa" }
+crossbeam-channel = "0.5"
+engine = { path = "../engine" }

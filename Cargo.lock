@@ -150,6 +150,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "controller"
+version = "0.1.0"
+dependencies = [
+ "audio_alsa",
+ "crossbeam-channel",
+ "engine",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -238,12 +247,6 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
-
-[[package]]
-name = "font8x8"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "875488b8711a968268c7cf5d139578713097ca4635a76044e8fe8eedf831d07e"
 
 [[package]]
 name = "hashbrown"
@@ -395,6 +398,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "audio_alsa",
+ "controller",
  "crossbeam-channel",
  "engine",
  "env_logger",
@@ -624,7 +628,6 @@ name = "ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "font8x8",
  "rppal",
 ]
 
