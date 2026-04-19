@@ -2376,7 +2376,8 @@ mod tests {
         let config = GranularConfig {
             grain_density_hz: 200.0,
             grain_size_ms: 20.0,
-            grain_note_ms: 50.0,
+            grain_note_ms_min: 50.0,
+            grain_note_ms_max: 50.0,
             max_overlapping_grains: 16,
             ..GranularConfig::default()
         };

@@ -125,8 +125,10 @@ struct AppConfig {
     granular_attack_ms: f32,
     #[serde(default = "default_granular_release_ms")]
     granular_release_ms: f32,
-    #[serde(default = "default_granular_note_ms")]
-    granular_note_ms: f32,
+    #[serde(default = "default_granular_note_ms_min")]
+    granular_note_ms_min: f32,
+    #[serde(default = "default_granular_note_ms_max")]
+    granular_note_ms_max: f32,
     #[serde(default = "default_granular_spawn_jitter")]
     granular_spawn_jitter: f32,
     #[serde(default = "default_granular_wavs")]
@@ -263,8 +265,11 @@ fn default_granular_attack_ms() -> f32 {
 fn default_granular_release_ms() -> f32 {
     25.0
 }
-fn default_granular_note_ms() -> f32 {
-    4000.0
+fn default_granular_note_ms_min() -> f32 {
+    2000.0
+}
+fn default_granular_note_ms_max() -> f32 {
+    15000.0
 }
 fn default_granular_spawn_jitter() -> f32 {
     0.5
@@ -331,7 +336,8 @@ impl Default for AppConfig {
             granular_position_jitter: default_granular_position_jitter(),
             granular_attack_ms: default_granular_attack_ms(),
             granular_release_ms: default_granular_release_ms(),
-            granular_note_ms: default_granular_note_ms(),
+            granular_note_ms_min: default_granular_note_ms_min(),
+            granular_note_ms_max: default_granular_note_ms_max(),
             granular_spawn_jitter: default_granular_spawn_jitter(),
             granular_wavs: default_granular_wavs(),
             granular_volume: default_granular_volume(),
@@ -407,7 +413,8 @@ struct UserConfig {
     granular_position_jitter: Option<f32>,
     granular_attack_ms: Option<f32>,
     granular_release_ms: Option<f32>,
-    granular_note_ms: Option<f32>,
+    granular_note_ms_min: Option<f32>,
+    granular_note_ms_max: Option<f32>,
     granular_spawn_jitter: Option<f32>,
     granular_wavs: Option<usize>,
     granular_volume: Option<u8>,
@@ -489,7 +496,8 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
             .unwrap_or(base.granular_position_jitter),
         granular_attack_ms: user.granular_attack_ms.unwrap_or(base.granular_attack_ms),
         granular_release_ms: user.granular_release_ms.unwrap_or(base.granular_release_ms),
-        granular_note_ms: user.granular_note_ms.unwrap_or(base.granular_note_ms),
+        granular_note_ms_min: user.granular_note_ms_min.unwrap_or(base.granular_note_ms_min),
+        granular_note_ms_max: user.granular_note_ms_max.unwrap_or(base.granular_note_ms_max),
         granular_spawn_jitter: user
             .granular_spawn_jitter
             .unwrap_or(base.granular_spawn_jitter),
@@ -503,7 +511,8 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
 fn granular_config(config: &AppConfig) -> GranularConfig {
     GranularConfig {
         grain_size_ms: config.granular_grain_size_ms,
-        grain_note_ms: config.granular_note_ms,
+        grain_note_ms_min: config.granular_note_ms_min,
+        grain_note_ms_max: config.granular_note_ms_max,
         spawn_jitter: config.granular_spawn_jitter,
         grain_density_hz: config.granular_density_hz,
         max_overlapping_grains: config.granular_max_overlap.max(1),

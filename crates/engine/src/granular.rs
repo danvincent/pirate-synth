@@ -99,12 +99,18 @@ pub(crate) fn spawn_grain(
 
     let osc = &mut oscillators[osc_idx];
 
-    // grain_size_ms is the WAV window size (texture chunk); grain_note_ms is the total
-    // note lifespan. If grain_note_ms is 0 or unset, fall back to grain_size_ms.
-    let note_ms = if granular.config.grain_note_ms > 0.0 {
-        granular.config.grain_note_ms
-    } else {
-        granular.config.grain_size_ms
+    // Randomise grain lifespan between min and max so multiple voices expire at different times.
+    let note_ms = {
+        let min = granular.config.grain_note_ms_min;
+        let max = granular.config.grain_note_ms_max;
+        if max > min {
+            let t = lcg_next(&mut granular.rng_state) as f32 / u32::MAX as f32;
+            min + t * (max - min)
+        } else if min > 0.0 {
+            min
+        } else {
+            granular.config.grain_size_ms
+        }
     };
     let note_len_samples =
         ((note_ms.max(1.0) / 1000.0) * output_sample_rate) as usize;

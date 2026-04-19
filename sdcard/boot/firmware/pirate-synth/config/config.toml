@@ -92,7 +92,8 @@ granular_volume       = 50     # Granular mix volume 0–100
 
 # Grain texture parameters
 granular_grain_size_ms     = 250.0  # ms — WAV window size per grain; longer = smoother texture
-granular_note_ms           = 4000.0 # ms — total grain lifespan before expiry
+granular_note_ms_min       = 2000.0  # ms — minimum grain lifespan; each grain picks a random duration in this range
+granular_note_ms_max       = 15000.0 # ms — maximum grain lifespan; staggered expiry causes voices to stop/start at different times
 granular_density_hz        = 4.0    # Grains spawned per second; higher = denser cloud
 granular_max_overlap       = 16     # Maximum simultaneously active grains
 granular_spawn_jitter      = 0.5    # 0.0–1.0 — timing randomness; 0.5 = ±50% interval

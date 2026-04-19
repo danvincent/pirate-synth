@@ -25,9 +25,10 @@ pub enum SourceKind {
 #[derive(Clone, Copy, Debug)]
 pub struct GranularConfig {
     pub grain_size_ms: f32,
-    /// Total note duration in ms; grain loops its WAV window for this long before expiring.
-    /// Use grain_size_ms as the looped window; grain_note_ms as overall lifespan.
-    pub grain_note_ms: f32,
+    /// Minimum grain lifespan in ms. Each grain randomly picks a duration in [min, max).
+    pub grain_note_ms_min: f32,
+    /// Maximum grain lifespan in ms. Each grain randomly picks a duration in [min, max).
+    pub grain_note_ms_max: f32,
     /// Spawn interval jitter: ±this fraction of spawn interval is added randomly each spawn.
     pub spawn_jitter: f32,
     pub grain_density_hz: f32,
@@ -42,7 +43,8 @@ impl Default for GranularConfig {
     fn default() -> Self {
         Self {
             grain_size_ms: 250.0,
-            grain_note_ms: 4000.0,
+            grain_note_ms_min: 2000.0,
+            grain_note_ms_max: 15000.0,
             spawn_jitter: 0.5,
             grain_density_hz: 4.0,
             max_overlapping_grains: 16,
