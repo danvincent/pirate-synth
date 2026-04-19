@@ -1,55 +1,7 @@
 use anyhow::Result;
 use std::path::Path;
 use crate::framebuffer::Framebuffer;
-use crate::menu::{MenuState, VideoStatus, SCALE_NAMES, BANK_NAMES};
-
-/// Render two mockup frames showing the proposed UI redesign to PPM files in `dir`.
-/// Screen 1: top of list, item 0 selected.
-/// Screen 2: scrolled down, item 10 (WT OSCS) selected.
-pub fn draw_redesign_mockups_ppm(dir: &Path) -> Result<()> {
-    let state = MenuState {
-        key_index: 9,          // A
-        octave: 1,
-        fine_tune_cents: 0.0,
-        stereo_spread: 100,
-        scale_index: 7,        // HIRAJOSHI
-        bank_index: 0,
-        wt_volume: 50,
-        gr_volume: 50,
-        oscillators_active: true,
-        granular_active: false,
-        osc_count: 8,
-        gr_voices: 8,
-        video_status: VideoStatus::Off,
-        glide_progress: None,
-        selected_item: 0,
-        scroll_offset: 0,
-    };
-
-    // Screen 1: cursor at item 0, no scroll
-    render_redesign_frame_to_ppm(
-        &state,
-        0,
-        0,
-        &dir.join("redesign-screen1-top.ppm"),
-    )?;
-
-    // Screen 2: cursor at item 10 (WT OSCS), scrolled (scroll_offset=1)
-    render_redesign_frame_to_ppm(
-        &state,
-        10,
-        1,
-        &dir.join("redesign-screen2-scrolled.ppm"),
-    )?;
-
-    // Screen 3: idle overview screen
-    render_idle_screen_to_ppm(
-        &state,
-        &dir.join("redesign-screen3-idle.ppm"),
-    )?;
-
-    Ok(())
-}
+use crate::menu::{MenuState, SCALE_NAMES};
 
 pub(crate) fn build_redesign_framebuffer(
     state: &MenuState,
@@ -117,15 +69,6 @@ pub(crate) fn build_redesign_framebuffer(
     }
 
     fb
-}
-
-fn render_redesign_frame_to_ppm(
-    state: &MenuState,
-    selected_item: usize,
-    scroll_offset: usize,
-    path: &Path,
-) -> Result<()> {
-    build_redesign_framebuffer(state, selected_item, scroll_offset).save_ppm(path)
 }
 
 /// Render the idle "at-a-glance" overview screen to a PPM file.
