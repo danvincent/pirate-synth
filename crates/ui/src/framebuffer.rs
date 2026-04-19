@@ -127,6 +127,11 @@ impl Framebuffer {
         self.pixels[y * self.width + x] = color;
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn get_pixel(&self, x: usize, y: usize) -> u16 {
+        self.pixels[y * self.width + x]
+    }
+
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(self.pixels.len() * 2);
         for px in &self.pixels {

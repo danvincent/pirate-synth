@@ -4,6 +4,7 @@ use rppal::spi::{Bus, Mode, SlaveSelect, Spi};
 use std::path::Path;
 use crate::framebuffer::Framebuffer;
 use crate::menu::{MenuState, SCALE_NAMES};
+use crate::redesign::build_redesign_framebuffer;
 
 // Keep SPI transfers small to avoid EMSGSIZE from Linux spidev on constrained targets.
 pub(crate) const SPI_FRAMEBUFFER_CHUNK_SIZE: usize = 4096;
@@ -78,6 +79,7 @@ impl St7789Display {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn draw_menu(&mut self, state: &MenuState) -> Result<()> {
         const VISIBLE_ROWS: usize = 11;
 
@@ -97,6 +99,26 @@ impl St7789Display {
             }
         }
 
+        self.command(0x2A, &[0x00, 0x00, 0x00, 0xEF])?;
+        self.command(0x2B, &[0x00, 0x00, 0x00, 0xEF])?;
+        self.dc.set_low();
+        self.spi
+            .write(&[0x2C])
+            .map(|_| ())
+            .context("failed writing ST7789 RAMWR command")?;
+        self.dc.set_high();
+        let bytes = fb.to_bytes();
+        write_in_chunks(&bytes, SPI_FRAMEBUFFER_CHUNK_SIZE, |chunk| {
+            self.spi
+                .write(chunk)
+                .map(|_| ())
+                .context("failed writing ST7789 framebuffer chunk")
+        })?;
+        Ok(())
+    }
+
+    pub fn draw_redesign(&mut self, state: &MenuState) -> Result<()> {
+        let fb = build_redesign_framebuffer(state, state.selected_item, state.scroll_offset);
         self.command(0x2A, &[0x00, 0x00, 0x00, 0xEF])?;
         self.command(0x2B, &[0x00, 0x00, 0x00, 0xEF])?;
         self.dc.set_low();

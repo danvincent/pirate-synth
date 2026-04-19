@@ -51,12 +51,11 @@ pub fn draw_redesign_mockups_ppm(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn render_redesign_frame_to_ppm(
+pub(crate) fn build_redesign_framebuffer(
     state: &MenuState,
     selected_item: usize,
     scroll_offset: usize,
-    path: &Path,
-) -> Result<()> {
+) -> Framebuffer {
     const VISIBLE_ROWS: usize = 11;
 
     let mut fb = Framebuffer::new(240, 240);
@@ -131,7 +130,16 @@ fn render_redesign_frame_to_ppm(
         }
     }
 
-    fb.save_ppm(path)
+    fb
+}
+
+fn render_redesign_frame_to_ppm(
+    state: &MenuState,
+    selected_item: usize,
+    scroll_offset: usize,
+    path: &Path,
+) -> Result<()> {
+    build_redesign_framebuffer(state, selected_item, scroll_offset).save_ppm(path)
 }
 
 /// Render the idle "at-a-glance" overview screen to a PPM file.
@@ -207,4 +215,61 @@ fn render_idle_screen_to_ppm(state: &MenuState, path: &Path) -> Result<()> {
     fb.draw_text(44, 226, "Press any key", 0x4208, 0x0000); // dim white
 
     fb.save_ppm(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::menu::{MenuState, VideoStatus};
+
+    fn test_state() -> MenuState {
+        MenuState {
+            key_index: 9,
+            octave: 1,
+            fine_tune_cents: 0.0,
+            stereo_spread: 100,
+            scale_index: 7,
+            bank_index: 0,
+            wt_volume: 50,
+            gr_volume: 50,
+            oscillators_active: true,
+            granular_active: false,
+            osc_count: 8,
+            gr_voices: 8,
+            video_status: VideoStatus::Off,
+            glide_progress: None,
+            selected_item: 0,
+            scroll_offset: 0,
+        }
+    }
+
+    #[test]
+    fn redesign_framebuffer_selected_row_has_green_highlight() {
+        let state = test_state(); // selected_item=0, scroll_offset=0
+        let fb = build_redesign_framebuffer(&state, 0, 0);
+        // Item 0 is selected; bg fill covers y=28..42, x=2..238 with 0x07E0 (green)
+        // Check a pixel well inside the bg region but away from text
+        let pixel = fb.get_pixel(200, 30);
+        assert_eq!(pixel, 0x07E0, "selected row should have green highlight (0x07E0)");
+    }
+
+    #[test]
+    fn redesign_framebuffer_wt_header_active_uses_green() {
+        let mut state = test_state();
+        state.oscillators_active = true;
+        let fb = build_redesign_framebuffer(&state, 0, 0);
+        // WT block is at x=0..116, y=0..13; when active bg is 0x07E0 (green)
+        // Check a pixel well inside the block at (2, 2)
+        let pixel = fb.get_pixel(2, 2);
+        assert_eq!(pixel, 0x07E0, "WT header should be green (0x07E0) when oscillators active");
+    }
+
+    #[test]
+    fn redesign_framebuffer_divider_row_not_black() {
+        let state = test_state();
+        let fb = build_redesign_framebuffer(&state, 0, 0);
+        // Divider at y=26, colour 0x4208 — any pixel in that row should be non-zero
+        let pixel = fb.get_pixel(120, 26);
+        assert_eq!(pixel, 0x4208, "divider row at y=26 should be 0x4208 (dim white)");
+    }
 }
