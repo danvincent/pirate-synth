@@ -102,21 +102,7 @@ pub(crate) fn build_redesign_framebuffer(
     fb.fill_rect(0, 26, 240, 2, 0x4208);
 
     // ── Items ─────────────────────────────────────────────────────────────────
-    let lines: Vec<String> = vec![
-        format!("{:<20}{:>9}", "Wavetable", if state.oscillators_active { "On" } else { "Off" }),
-        format!("{:<20}{:>9}", "Granular",  if state.granular_active    { "On" } else { "Off" }),
-        format!("{:<20}{:>9}", "Key",       state.key_name()),
-        format!("{:<20}{:>9}", "Octave",    state.octave),
-        format!("{:<20}{:>9}", "Scale",     SCALE_NAMES[state.scale_index]),
-        format!("{:<20}{:>9}", "WT Bank",   BANK_NAMES[state.bank_index]),
-        format!("{:<20}{:>9}", "WT Vol",    state.wt_volume),
-        format!("{:<20}{:>9}", "GR Vol",    state.gr_volume),
-        format!("{:<20}{:>9}", "Stereo",    state.stereo_spread),
-        format!("{:<20}{:>9}", "Cents",     format!("{:+}", state.fine_tune_cents as i32)),
-        format!("{:<20}{:>9}", "WT Oscs",   state.osc_count),
-        format!("{:<20}{:>9}", "GR Voices", state.gr_voices),
-        format!("{:<20}{:>9}", "Video",     state.video_status.as_str()),
-    ];
+    let lines = state.lines();
 
     for (index, line) in lines.iter().enumerate() {
         if index >= scroll_offset && index < scroll_offset + VISIBLE_ROWS {
