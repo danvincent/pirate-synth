@@ -800,7 +800,9 @@ fn main() -> Result<()> {
                         if menu.key_index != next_key || menu.octave != next_octave {
                             menu.key_index = next_key;
                             menu.octave = next_octave;
-                            display.draw_redesign(&menu)?;
+                            if !idle_mode {
+                                display.draw_redesign(&menu)?;
+                            }
                             let hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
                             synth.set_note_hz(hz);
                         }
