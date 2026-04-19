@@ -300,11 +300,17 @@ impl Engine {
     }
 
     pub fn set_fine_tune_cents(&mut self, cents: f32) {
-        let delta = (cents - self.fine_tune_cents).abs();
-        let jitter = 0.8 + (lcg_next(&mut self.rng_state) as f32 / u32::MAX as f32) * 0.4;
-        self.cents_ramp_rate = delta
-            / ((self.note_transition_ms / 1000.0 * jitter).max(0.001) * self.sample_rate as f32);
-        self.target_fine_tune_cents = cents;
+        if self.note_transition_ms <= 0.0 {
+            self.fine_tune_cents = cents;
+            self.target_fine_tune_cents = cents;
+            self.cents_ramp_rate = 0.0;
+        } else {
+            let delta = (cents - self.fine_tune_cents).abs();
+            let jitter = 0.8 + (lcg_next(&mut self.rng_state) as f32 / u32::MAX as f32) * 0.4;
+            self.cents_ramp_rate =
+                delta / ((self.note_transition_ms / 1000.0 * jitter) * self.sample_rate as f32).max(1.0);
+            self.target_fine_tune_cents = cents;
+        }
     }
 
     pub fn set_stereo_spread(&mut self, spread: u8) {
