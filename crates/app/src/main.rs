@@ -890,7 +890,6 @@ fn main() -> Result<()> {
                                 menu.fine_tune_cents = cents;
                                 synth.stage_fine_tune_cents(menu.fine_tune_cents);
                                 redraw = true;
-                                redraw = true;
                             }
                         }
                     }

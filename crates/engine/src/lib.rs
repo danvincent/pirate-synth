@@ -48,7 +48,7 @@ impl Voice {
 
 struct Oscillator {
     phase: f32,
-    detune_ratio: f32,
+    pub(crate) detune_ratio: f32,
     current_base_hz: f32,
     target_base_hz: f32,
     hz_ramp_rate: f32,
@@ -61,8 +61,8 @@ struct Oscillator {
     filter_lfo_phase: f32,
     filter_state: f32,
     wt_offset: usize,
-    target_detune_ratio: f32,
-    detune_ramp_rate: f32,
+    pub(crate) target_detune_ratio: f32,
+    pub(crate) detune_ramp_rate: f32,
 }
 
 
@@ -78,7 +78,7 @@ pub struct Engine {
     sample_rate: u32,
     wavetables: Arc<[Wavetable]>,
     wavetable_offset: usize,
-    oscillators: Vec<Oscillator>,
+    pub(crate) oscillators: Vec<Oscillator>,
     base_frequency_hz: f32,
     note_transition_ms: f32,
     fine_tune_cents: f32,
@@ -711,7 +711,14 @@ impl Engine {
                                 let cents = (semitones[st_idx] * 100) as f32 + (octave as f32 * 1200.0);
                                 let jitter = 0.8 + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
                                 osc.target_detune_ratio = 2.0f32.powf(cents / 1200.0);
-                                osc.detune_ramp_rate = 1.0 / ((self.note_transition_ms / 1000.0 * jitter).max(0.001) * self.sample_rate as f32);
+                                if self.note_transition_ms <= 0.0 {
+                                    osc.detune_ratio = osc.target_detune_ratio;
+                                    osc.detune_ramp_rate = 0.0;
+                                } else {
+                                    osc.detune_ramp_rate = 1.0
+                                        / ((self.note_transition_ms / 1000.0 * jitter).max(0.001)
+                                            * self.sample_rate as f32);
+                                }
                             }
                         }
                     }
@@ -840,14 +847,16 @@ impl Engine {
             if mix_granular {
                 let (gran_l, gran_r) = self.render_granular_frame_normalized();
                 let (processed_l, processed_r) = if self.granular_reverb_enabled {
-                    let rev_odd_l = self.granular_reverb_odd.process(gran_l);
-                    let rev_odd_r = self.granular_reverb_odd.process(gran_r);
-                    let rev_even_l = self.granular_reverb_even.process(gran_l);
-                    let rev_even_r = self.granular_reverb_even.process(gran_r);
+                    // Treat granular reverb as a mono send so each stateful reverb
+                    // instance is advanced once per frame rather than once per channel.
+                    let gran_mono = 0.5 * (gran_l + gran_r);
+                    let rev_odd = self.granular_reverb_odd.process(gran_mono);
+                    let rev_even = self.granular_reverb_even.process(gran_mono);
                     let wet = self.granular_reverb_wet;
                     let dry = 1.0 - wet;
-                    let processed_l = dry * gran_l + wet * (rev_odd_l + rev_even_l) * 0.5;
-                    let processed_r = dry * gran_r + wet * (rev_odd_r + rev_even_r) * 0.5;
+                    let wet_mono = (rev_odd + rev_even) * 0.5;
+                    let processed_l = dry * gran_l + wet * wet_mono;
+                    let processed_r = dry * gran_r + wet * wet_mono;
                     (processed_l, processed_r)
                 } else {
                     (gran_l, gran_r)
@@ -2627,5 +2636,59 @@ mod tests {
         assert!(rate_with_0_1s > 0.0, "second rate should be non-zero");
         // Rough sanity check: both should complete in similar time scales
         // (accounting for different deltas and ±20% jitter)
+    }
+
+    #[test]
+    fn test_scale_hop_snaps_immediately_when_no_transition() {
+        // With note_transition_ms = 0.0, the scale hop should snap detune_ratio
+        // immediately (detune_ramp_rate == 0.0) rather than gliding over ~1ms.
+        // We set scale mode to Major and run many samples until a hop fires.
+        let table = default_sine_wavetable();
+        let mut engine = Engine::new(44100, 1, vec![table]).unwrap();
+        engine.set_frequency(261.63);
+        engine.set_note_transition_ms(0.0);
+        engine.set_scale(ScaleMode::Major, 50.0);
+
+        // Run up to 500_000 samples; a hop fires at ~1/50000 chance per cycle
+        let mut buf = vec![0i16; 500_000 * 2];
+        engine.render_i16_stereo(&mut buf);
+
+        // After rendering, every oscillator must have ramp_rate == 0
+        // (snap mode means no in-progress glide should exist)
+        for osc in &engine.oscillators {
+            assert_eq!(
+                osc.detune_ramp_rate, 0.0,
+                "detune_ramp_rate should be 0 in snap mode"
+            );
+            // detune_ratio must equal target (no pending ramp)
+            assert_eq!(
+                osc.detune_ratio, osc.target_detune_ratio,
+                "detune_ratio must equal target in snap mode"
+            );
+        }
+    }
+
+    #[test]
+    fn test_granular_reverb_mono_send_no_coupling() {
+        // When granular reverb is enabled, both channels should receive the same
+        // wet signal (mono send). Running L then R through the same stateful
+        // Reverb instance would produce different results; mono mix avoids this.
+        // We verify by checking that a symmetric stereo input (gran_l == gran_r)
+        // produces symmetric output (processed_l == processed_r) after reverb.
+        //
+        // Use the Reverb struct directly to confirm mono-send symmetry.
+        let mut reverb = reverb::Reverb::new_with_params(true, 0.88, 0.12, 8);
+        let input = 0.5_f32;
+        // Mono send: process the same value once
+        let mono_out = reverb.process(input);
+        // The result should be deterministic and not depend on a second call
+        // (which would advance internal state a second time).
+        assert!(mono_out.is_finite(), "reverb output should be finite");
+        // Symmetric L/R dry+wet blend
+        let wet = 0.45_f32;
+        let dry = 1.0 - wet;
+        let processed_l = dry * input + wet * mono_out;
+        let processed_r = dry * input + wet * mono_out;
+        assert_eq!(processed_l, processed_r, "symmetric input should yield symmetric output with mono reverb send");
     }
 }

@@ -53,6 +53,16 @@ run_as_user() {
     fi
 }
 
+# Run a privileged command: directly if already root, via sudo otherwise.
+apt_cmd() {
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+        "$@"
+    else
+        require_cmd sudo "sudo is required to install packages. Re-run as root or install sudo."
+        sudo "$@"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Rust toolchain check
 # ---------------------------------------------------------------------------
@@ -80,16 +90,16 @@ PACKAGES=(
 )
 
 info "Enabling armhf architecture (required for libasound2-dev:armhf)"
-sudo dpkg --add-architecture armhf
+apt_cmd dpkg --add-architecture armhf
 
 info "Updating package index"
-sudo apt-get update -q
+apt_cmd apt-get update -q
 
 info "Installing native packages: ${PACKAGES[*]}"
-sudo apt-get install -y "${PACKAGES[@]}"
+apt_cmd apt-get install -y "${PACKAGES[@]}"
 
 info "Installing armhf ALSA headers (for ARM cross-compilation)"
-sudo apt-get install -y libasound2-dev:armhf
+apt_cmd apt-get install -y libasound2-dev:armhf
 
 # ---------------------------------------------------------------------------
 # Rust target
