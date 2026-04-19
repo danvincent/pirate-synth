@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn menu_scroll_shifts_beyond_eleven_rows() {
-        // 12 items with 11 visible rows; scrolling past item 10 should increase scroll_offset
+        // 14 items with 11 visible rows; scrolling past item 10 should increase scroll_offset
         let mut menu = MenuState::new(0.0, 8, 8);
         for _ in 0..11 {
             menu.apply_button(Button::Down);
