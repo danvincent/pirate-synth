@@ -128,9 +128,17 @@ pub(crate) fn spawn_grain(
     // Base C2 is used by the wavetable drone path, so we keep pitch relationships aligned.
     let root_ratio = (base_frequency_hz / C2_FREQUENCY_HZ).max(0.01);
     let fine_ratio = 2.0f32.powf(fine_tune_cents / 1200.0);
+    
+    // Fold oscillator detune into one octave, producing the half-open range [-700, +500) cents
+    // ([-7, +5) semitones). This prevents chipmunk-style pitch jumps when the oscillator
+    // detune spans multiple octaves from scale/spread logic.
+    let detune_cents = 1200.0 * osc.detune_ratio.max(f32::MIN_POSITIVE).log2();
+    let folded_cents = (detune_cents + 700.0).rem_euclid(1200.0) - 700.0;
+    let grain_detune_ratio = 2.0f32.powf(folded_cents / 1200.0);
+    
     let playback_ratio = root_ratio
         * fine_ratio
-        * osc.detune_ratio
+        * grain_detune_ratio
         * (source.sample_rate as f32 / output_sample_rate);
 
     let attack =
@@ -176,4 +184,20 @@ pub(crate) fn sample_linear(samples: &[f32], pos: f32) -> f32 {
     let i1 = (i0 + 1).min(samples.len().saturating_sub(1));
     let frac = (pos - i0 as f32).clamp(0.0, 1.0);
     samples[i0] * (1.0 - frac) + samples[i1] * frac
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn grain_detune_clamped_within_bounds() {
+        let apply = |cents: f32| -> f32 {
+            let folded = (cents + 700.0).rem_euclid(1200.0) - 700.0;
+            2.0f32.powf(folded / 1200.0)
+        };
+
+        // +500 cents wraps to -700 (the fold boundary, half-open at +500)
+        assert!((apply(500.0) - 2.0f32.powf(-700.0/1200.0)).abs() < 1e-4, "+5st should fold to -7st boundary");
+        // +499 cents stays near +499 (just inside boundary)
+        assert!(apply(499.0) > 2.0f32.powf(498.0/1200.0), "+499 cents should be positive detune");
+    }
 }

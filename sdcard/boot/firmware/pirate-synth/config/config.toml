@@ -58,7 +58,7 @@ granular_reverb_comb_count = 8    # Full 8-comb Freeverb density
 # ── Tremolo ───────────────────────────────────────────────────────────────────
 # Slow amplitude modulation applied per oscillator at a randomised rate.
 tremolo_enabled = true
-tremolo_depth   = 0.35  # 0.0 = no tremolo, 1.0 = full depth (silence to full)
+tremolo_depth   = 0.05  # 0.0 = no tremolo, 1.0 = full depth (silence to full)
 
 # ── Wavetable crossfade ───────────────────────────────────────────────────────
 # Slowly cross-fades between adjacent wavetable frames for movement.
