@@ -1,8 +1,10 @@
 # pirate-synth
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=danvincent_pirate-synth&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=danvincent_pirate-synth) ![Built for Raspberry Pi](https://img.shields.io/badge/built_for-raspberry_pi-white)
 
-Boot-to-synth Raspberry Pi Zero project for the Pimoroni Pirate Audio Headphone Amp.
+Boot-to-synth Raspberry Pi Zero project for the [Pimoroni Pirate Audio Headphone Amp](https://shop.pimoroni.com/products/pirate-audio-headphone-amp?variant=31189750480979).
+
+
 
 ## Repository layout
 

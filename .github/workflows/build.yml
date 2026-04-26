@@ -47,9 +47,14 @@ jobs:
         uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
         with:
           toolchain: stable
+          components: llvm-tools-preview
+
+      - uses: taiki-e/install-action@cf525cb33f51aca27cd6fa02034117ab963ff9f1 # v2.75.22
+        with:
+          tool: cargo-llvm-cov
 
       - name: Run focused tests
-        run: cargo test -p engine -p ui -p pirate_synth
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
 
       - name: SonarCloud Scan
         if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
