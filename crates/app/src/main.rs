@@ -901,6 +901,9 @@ fn main() -> Result<()> {
                             if let Err(err) = audio_tx.send_timeout(AudioCommand::Stop, Duration::from_millis(200)) {
                                 warn!("failed to send stop to audio thread before shutdown: {err}");
                             }
+                            if let Err(err) = display.clear_and_backlight_off() {
+                                warn!("failed to clear display before shutdown: {err}");
+                            }
                             break;
                         }
                         Ok(status) => {

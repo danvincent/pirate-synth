@@ -207,6 +207,15 @@ impl St7789Display {
         Ok(())
     }
 
+    pub fn clear_and_backlight_off(&mut self) -> Result<()> {
+        let fb = Framebuffer::new(240, 240);
+        self.write_full_framebuffer(&fb.to_bytes())?;
+        if let Some(ref mut backlight) = self.backlight {
+            backlight.set_low();
+        }
+        Ok(())
+    }
+
     fn write_full_framebuffer(&mut self, bytes: &[u8]) -> Result<()> {
         self.command(0x2A, &[0x00, 0x00, 0x00, 0xEF])?;
         self.command(0x2B, &[0x00, 0x00, 0x00, 0xEF])?;
