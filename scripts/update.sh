@@ -17,7 +17,7 @@ if [[ ! -d "$SRC_DIR" ]]; then
 fi
 
 echo "==> Stopping $SERVICE_NAME service..."
-systemctl stop "$SERVICE_NAME.service"
+systemctl stop "$SERVICE_NAME.service" || true
 
 echo "==> Installing binary..."
 install -m 0755 "$SRC_DIR/bin/pirate_synth" /usr/local/bin/pirate_synth

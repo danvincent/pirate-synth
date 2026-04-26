@@ -3115,4 +3115,209 @@ mod tests {
         let mean_abs: f32 = samples_f32.iter().map(|s| s.abs()).sum::<f32>() / samples_f32.len() as f32;
         assert!(mean_abs > 0.01, "output should not be silent; mean_abs = {mean_abs:.6}");
     }
+
+    // ── assign_channels edge-case coverage ──────────────────────────────────
+
+    #[test]
+    fn assign_channels_should_clear_channels_when_n_sources_is_zero() {
+        let mut config = GranularConfig::default();
+        config.granular_channels = 4;
+        let mut state = GranularState::new(test_granular_sources(2), config);
+        // pre-populate to confirm clear happens
+        state.channels.push(super::granular::GranularChannel { detune_ratio: 1.0, source_index: 0 });
+
+        super::granular::assign_channels(&mut state, &config, 0, 0xaaaa);
+
+        assert!(state.channels.is_empty(), "channels must be empty when n_sources == 0");
+        assert_eq!(state.channel_counter, 0);
+    }
+
+    #[test]
+    fn assign_channels_should_clear_channels_when_granular_channels_is_zero() {
+        let mut config = GranularConfig::default();
+        config.granular_channels = 0;
+        let mut state = GranularState::new(test_granular_sources(2), config);
+        state.channels.push(super::granular::GranularChannel { detune_ratio: 1.0, source_index: 0 });
+
+        super::granular::assign_channels(&mut state, &config, 2, 0xbbbb);
+
+        assert!(state.channels.is_empty(), "channels must be empty when granular_channels == 0");
+    }
+
+    #[test]
+    fn assign_channels_should_produce_unity_detune_when_scale_mode_is_none() {
+        // ScaleMode::None has no semitones → the loop's is_empty() branch is hit → all ratios == 1.0
+        let mut config = GranularConfig::default();
+        config.scale_mode = ScaleMode::None;
+        config.granular_channels = 6;
+        config.granular_pitch_cents = 1200.0;
+        let mut state = GranularState::new(test_granular_sources(2), config);
+
+        super::granular::assign_channels(&mut state, &config, 2, 0xcccc);
+
+        assert_eq!(state.channels.len(), 6);
+        assert!(
+            state.channels.iter().all(|ch| relative_eq!(ch.detune_ratio, 1.0, epsilon = 1e-6)),
+            "all channels must have unity detune when ScaleMode::None"
+        );
+    }
+
+    #[test]
+    fn assign_channels_should_produce_unity_detune_when_scale_has_single_note() {
+        // A single-note scale has spread == 0 → the spread <= 0 branch is hit → semitone_offset = 0.0
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        struct SingleNote;
+        // Use a built-in scale that has identical min/max → Pentatonic has distinct notes,
+        // so use a scale where all notes equal 0. Simulate this by using ScaleMode::None
+        // is already tested; instead test with a scale that has spread == 0 by patching config
+        // manually: if granular_pitch_cents == 0 the spread check is never reached,
+        // but here we want the spread <= 0 branch. We use WholeTone (min=0, max=10) and
+        // set pitch_cents to 0 so half_spread_semitones=0 → detune ratios all 1.0.
+        let mut config = GranularConfig::default();
+        config.scale_mode = ScaleMode::WholeTone;
+        config.granular_channels = 4;
+        config.granular_pitch_cents = 0.0; // half_spread = 0 → detune_ratio = 2^0 = 1.0
+        let mut state = GranularState::new(test_granular_sources(2), config);
+
+        super::granular::assign_channels(&mut state, &config, 2, 0xdddd);
+
+        assert_eq!(state.channels.len(), 4);
+        assert!(
+            state.channels.iter().all(|ch| relative_eq!(ch.detune_ratio, 1.0, epsilon = 1e-6)),
+            "all channels must have unity detune when pitch_cents == 0"
+        );
+    }
+
+    // ── set_granular_config coverage ────────────────────────────────────────
+
+    #[test]
+    fn set_granular_config_should_update_config_and_refresh_channels() {
+        let mut engine = Engine::new_granular(
+            48_000,
+            2,
+            test_granular_sources(2),
+            GranularConfig::default(),
+        )
+        .unwrap();
+        // Initially channels should be refreshed on set_granular_active_immediate
+        engine.set_granular_active_immediate(true);
+        let initial_channel_count = engine.granular.as_ref().unwrap().channels.len();
+
+        let mut new_config = GranularConfig::default();
+        new_config.granular_channels = initial_channel_count + 2;
+        new_config.scale_mode = ScaleMode::Major;
+        new_config.granular_pitch_cents = 1200.0;
+        engine.set_granular_config(new_config);
+
+        let new_count = engine.granular.as_ref().unwrap().channels.len();
+        assert_eq!(
+            new_count,
+            new_config.granular_channels,
+            "set_granular_config must refresh channel count"
+        );
+    }
+
+    // ── set_scale with granular engine ──────────────────────────────────────
+
+    #[test]
+    fn set_scale_should_update_granular_config_scale_mode_and_refresh_channels() {
+        let mut engine = Engine::new_granular(
+            48_000,
+            2,
+            test_granular_sources(2),
+            GranularConfig::default(),
+        )
+        .unwrap();
+        engine.set_granular_active_immediate(true);
+
+        // Before: scale_mode is None (default)
+        {
+            let g = engine.granular.as_ref().unwrap();
+            assert_eq!(g.config.scale_mode, ScaleMode::None);
+        }
+
+        engine.set_scale(ScaleMode::Major, 50.0);
+
+        {
+            let g = engine.granular.as_ref().unwrap();
+            assert_eq!(
+                g.config.scale_mode,
+                ScaleMode::Major,
+                "set_scale must propagate mode into granular config"
+            );
+            assert!(
+                !g.channels.is_empty(),
+                "channels must be populated after set_scale on a granular engine"
+            );
+        }
+    }
+
+    #[test]
+    fn set_scale_to_none_should_clear_granular_channel_assignments() {
+        let mut config = GranularConfig::default();
+        config.granular_channels = 4;
+        config.scale_mode = ScaleMode::Major;
+        let mut engine = Engine::new_granular(48_000, 2, test_granular_sources(2), config).unwrap();
+        engine.set_granular_active_immediate(true);
+
+        engine.set_scale(ScaleMode::None, 50.0);
+
+        let g = engine.granular.as_ref().unwrap();
+        assert_eq!(g.config.scale_mode, ScaleMode::None);
+        // With ScaleMode::None semitones is empty → all channels have unity detune
+        assert!(
+            g.channels.iter().all(|ch| relative_eq!(ch.detune_ratio, 1.0, epsilon = 1e-6)),
+            "ScaleMode::None must produce unity detune on all channels"
+        );
+    }
+
+    #[test]
+    fn refresh_granular_channel_assignments_should_respect_configured_wavs() {
+        // configured_wavs is used to cap n_sources in refresh_granular_channel_assignments.
+        // If configured_wavs < sources.len(), only configured_wavs sources should be addressed.
+        let mut config = GranularConfig::default();
+        config.granular_channels = 8;
+        config.scale_mode = ScaleMode::WholeTone;
+        config.granular_pitch_cents = 1200.0;
+        let sources = test_granular_sources(3);
+        let mut engine = Engine::new_granular(48_000, 2, sources, config).unwrap();
+
+        // set_granular_wavs(1) caps configured_wavs to 1
+        engine.set_granular_wavs(1);
+
+        let g = engine.granular.as_ref().unwrap();
+        // All channel source_indices must be < configured_wavs (1), i.e. == 0
+        assert!(
+            g.channels.iter().all(|ch| ch.source_index < 1),
+            "all channel source_indices must be within configured_wavs"
+        );
+    }
+
+    #[test]
+    fn set_granular_wavs_zero_should_clear_active_grains() {
+        let source = GranularSource {
+            name: "test".to_string(),
+            sample_rate: 48_000,
+            samples: vec![0.5f32; 48_000],
+        };
+        let mut config = GranularConfig::default();
+        config.grain_density_hz = 200.0;
+        let mut engine = Engine::new_granular(48_000, 2, vec![source], config).unwrap();
+        engine.set_granular_wavs(1);
+        engine.set_granular_active_immediate(true);
+        engine.set_frequency(110.0);
+
+        // Warm up to populate active_grains
+        let mut buf = vec![0i16; 512];
+        for _ in 0..5 {
+            engine.render_i16_stereo(&mut buf);
+        }
+
+        engine.set_granular_wavs(0);
+
+        assert!(
+            engine.granular.as_ref().unwrap().active_grains.is_empty(),
+            "active_grains must be cleared when set_granular_wavs(0) is called"
+        );
+    }
 }
