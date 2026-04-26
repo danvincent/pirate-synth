@@ -35,6 +35,25 @@ impl ButtonReader {
         }
         Ok(None)
     }
+
+    pub fn raw_states(&self) -> [bool; 4] {
+        [
+            self.pins[0].is_low(),
+            self.pins[1].is_low(),
+            self.pins[2].is_low(),
+            self.pins[3].is_low(),
+        ]
+    }
+
+    /// Synchronises internal last-state tracking with current pin levels without
+    /// returning an event. Call this after suppressing normal polling (e.g. at the
+    /// end of a button combo) to prevent spurious rising edges on the next
+    /// `poll_pressed` call.
+    pub fn sync_state(&mut self) {
+        for (last, pin) in self.last.iter_mut().zip(self.pins.iter()) {
+            *last = pin.is_low();
+        }
+    }
 }
 
 fn open_input_pullup_pin(gpio: &Gpio, bcm_pin: u32) -> Result<InputPin> {
