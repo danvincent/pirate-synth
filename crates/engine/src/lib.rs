@@ -547,8 +547,10 @@ impl Engine {
 
     fn refresh_granular_channel_assignments(&mut self) {
         if let Some(granular) = self.granular.as_mut() {
-            let seed = lcg_next(&mut self.rng_state);
-            assign_channels(granular, seed);
+            let n_sources = granular.sources.len();
+            let config = granular.config;
+            let seed = lcg_next(&mut self.rng_state) as u64;
+            assign_channels(granular, &config, n_sources, seed);
         }
     }
 
