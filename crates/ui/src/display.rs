@@ -159,9 +159,10 @@ pub(crate) fn build_menu_framebuffer(state: &MenuState) -> Framebuffer {
     fb.fill_rect(0, 26, 240, 2, 0x4208);
 
     let lines = state.lines();
-    for (index, line) in lines.iter().skip(scroll_offset).take(VISIBLE_ROWS).enumerate() {
-        let y = 30 + (index as i32 * 18);
-        let selected = (index + scroll_offset) == selected_item;
+    for (visual_row, line) in lines.iter().skip(scroll_offset).take(VISIBLE_ROWS).enumerate() {
+        let abs_index = scroll_offset + visual_row;
+        let y = 30 + (visual_row as i32 * 18);
+        let selected = abs_index == selected_item;
         let bg = if selected { 0x07E0 } else { 0x0000 };
         let fg = if selected { 0x0000 } else { 0xFFFF };
         fb.fill_rect(2, y - 2, 236, 14, bg);
@@ -183,9 +184,9 @@ fn draw_menu_status_panel(
     inactive_bg: u16,
 ) {
     let bg = if active { active_bg } else { inactive_bg };
-    let fg = if active { 0x0000u16 } else { 0xFFFFu16 };
+    let fg: u16 = if active { 0x0000 } else { 0xFFFF };
     let state_str = if active { "On " } else { "Off" };
-    let bar_color = if active { 0xFFFFu16 } else { 0x8410u16 };
+    let bar_color: u16 = if active { 0xFFFF } else { 0x8410 };
 
     fb.fill_rect(x_offset, 0, 116, 13, bg);
     fb.draw_text(x_offset + 3, 3, label, fg, bg);
@@ -213,8 +214,8 @@ pub(crate) fn build_idle_framebuffer(state: &MenuState, hostname: &str) -> Frame
     let scale_w = scale.chars().count() as i32 * 16;
     fb.draw_text_2x((240 - scale_w) / 2, 58, scale, 0xAD55, 0x0000);
 
-    draw_idle_volume_bar(&mut fb, state.oscillators_active, state.wt_volume, 35,  0x07E0, 0x2945, "WT");
-    draw_idle_volume_bar(&mut fb, state.granular_active,    state.gr_volume,  155, 0x001F, 0x2945, "GR");
+    draw_idle_volume_bar(&mut fb, state.oscillators_active, state.wt_volume, 35, 0x07E0, 0x2945, "WT");
+    draw_idle_volume_bar(&mut fb, state.granular_active, state.gr_volume, 155, 0x001F, 0x2945, "GR");
 
     let wave_color: u16 = if state.oscillators_active || state.granular_active { 0x4208 } else { 0x2104 };
     draw_idle_sine_wave(&mut fb, 195, wave_color);
@@ -410,6 +411,27 @@ mod tests {
             fb_active.to_bytes(),
             fb_inactive.to_bytes(),
             "idle framebuffer must differ when granular_active changes"
+        );
+    }
+
+    #[test]
+    fn build_menu_framebuffer_highlights_correct_item_when_scrolled() {
+        // With scroll_offset=3 and selected_item=5, item at visual row 2 should be highlighted.
+        let mut state = MenuState::new(0.0, 8, 8);
+        state.selected_item = 5;
+        state.scroll_offset = 3;
+
+        // Render with item 5 selected (scrolled so first visible is item 3)
+        let fb_sel5 = build_menu_framebuffer(&state);
+
+        // Now select a different item in the same visible window — framebuffer must differ
+        state.selected_item = 4;
+        let fb_sel4 = build_menu_framebuffer(&state);
+
+        assert_ne!(
+            fb_sel5.to_bytes(),
+            fb_sel4.to_bytes(),
+            "framebuffer must differ when a different visible row is selected"
         );
     }
 }
