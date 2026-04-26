@@ -545,11 +545,19 @@ impl Engine {
         }
     }
 
+    fn refresh_granular_channel_assignments(&mut self) {
+        if let Some(granular) = self.granular.as_mut() {
+            let seed = lcg_next(&mut self.rng_state);
+            assign_channels(granular, seed);
+        }
+    }
+
     pub fn set_scale(&mut self, mode: ScaleMode, spread_percent: f32) {
         self.scale_mode = mode;
         if let Some(granular) = self.granular.as_mut() {
             granular.config.scale_mode = mode;
         }
+        self.refresh_granular_channel_assignments();
         let n = self.oscillators.len();
         let center = (n.saturating_sub(1) as f32) / 2.0;
 
