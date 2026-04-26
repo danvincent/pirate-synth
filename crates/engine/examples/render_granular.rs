@@ -219,22 +219,20 @@ fn main() -> Result<()> {
     let total_frames = (args.sample_rate as f32 * args.duration_s) as usize;
     const CHUNK_FRAMES: usize = 512;
     let mut buf = vec![0i16; CHUNK_FRAMES * 2];
-    let mut all_samples: Vec<i16> = Vec::with_capacity(total_frames * 2);
+
+    let file = std::fs::File::create(&args.out)?;
+    let mut writer = std::io::BufWriter::new(file);
+    write_wav_header(&mut writer, args.sample_rate, total_frames)?;
 
     let mut remaining = total_frames;
     while remaining > 0 {
         let frames = remaining.min(CHUNK_FRAMES);
         let chunk = &mut buf[..frames * 2];
         eng.render_i16_stereo(chunk);
-        all_samples.extend_from_slice(chunk);
+        for sample in chunk.iter() {
+            writer.write_all(&sample.to_le_bytes())?;
+        }
         remaining -= frames;
-    }
-
-    let file = std::fs::File::create(&args.out)?;
-    let mut writer = std::io::BufWriter::new(file);
-    write_wav_header(&mut writer, args.sample_rate, total_frames)?;
-    for sample in &all_samples {
-        writer.write_all(&sample.to_le_bytes())?;
     }
     writer.flush()?;
 
