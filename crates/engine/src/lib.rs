@@ -385,6 +385,7 @@ impl Engine {
         if let Some(granular) = self.granular.as_mut() {
             granular.config = config;
         }
+        self.refresh_granular_channel_assignments();
     }
 
     pub fn set_granular_wavs(&mut self, granular_wavs: usize) {
@@ -393,6 +394,9 @@ impl Engine {
             if granular_wavs == 0 {
                 granular.active_grains.clear();
             }
+        }
+        if granular_wavs > 0 {
+            self.refresh_granular_channel_assignments();
         }
     }
 
@@ -473,12 +477,7 @@ impl Engine {
     /// Fade in or out granular synthesis over 5 seconds.
     pub fn set_granular_active(&mut self, active: bool) {
         if active {
-            if let Some(granular) = self.granular.as_mut() {
-                let n_sources = granular.sources.len();
-                let config = granular.config;
-                let seed = self.rng_state ^ lcg_next(&mut self.rng_state) as u64;
-                assign_channels(granular, &config, n_sources, seed);
-            }
+            self.refresh_granular_channel_assignments();
         }
         self.granular_target_gain = if active { 1.0 } else { 0.0 };
     }
@@ -486,12 +485,7 @@ impl Engine {
     /// Instantly snap granular gain with no fade (use at startup).
     pub fn set_granular_active_immediate(&mut self, active: bool) {
         if active {
-            if let Some(granular) = self.granular.as_mut() {
-                let n_sources = granular.sources.len();
-                let config = granular.config;
-                let seed = self.rng_state ^ lcg_next(&mut self.rng_state) as u64;
-                assign_channels(granular, &config, n_sources, seed);
-            }
+            self.refresh_granular_channel_assignments();
         }
         let g = if active { 1.0 } else { 0.0 };
         self.granular_gain = g;
@@ -547,7 +541,7 @@ impl Engine {
 
     fn refresh_granular_channel_assignments(&mut self) {
         if let Some(granular) = self.granular.as_mut() {
-            let n_sources = granular.sources.len();
+            let n_sources = granular.configured_wavs.max(1).min(granular.sources.len());
             let config = granular.config;
             let seed = lcg_next(&mut self.rng_state) as u64;
             assign_channels(granular, &config, n_sources, seed);
@@ -1313,6 +1307,7 @@ mod tests {
         config.grain_density_hz = 48_000.0;
         config.grain_size_ms = 100.0;
         config.max_overlapping_grains = 16;
+        config.granular_channels = 0;
 
         let mut engine = Engine::new_granular(48_000, 4, vec![source_a, source_b], config).unwrap();
         engine.set_frequency(1.0);
