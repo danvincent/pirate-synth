@@ -4,7 +4,6 @@ use rppal::spi::{Bus, Mode, SlaveSelect, Spi};
 use std::path::Path;
 use crate::framebuffer::Framebuffer;
 use crate::menu::{MenuState, SCALE_NAMES};
-use crate::redesign::build_redesign_framebuffer;
 
 // Keep SPI transfers small to avoid EMSGSIZE from Linux spidev on constrained targets.
 pub(crate) const SPI_FRAMEBUFFER_CHUNK_SIZE: usize = 4096;
@@ -79,32 +78,60 @@ impl St7789Display {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn draw_menu(&mut self, state: &MenuState) -> Result<()> {
         const VISIBLE_ROWS: usize = 11;
+        let selected_item = state.selected_item;
+        let scroll_offset = state.scroll_offset;
 
         let mut fb = Framebuffer::new(240, 240);
         fb.clear(0x0000);
-        fb.draw_text(8, 8, "Pirate Synth", 0xFFFF, 0x0000);
 
-        for (index, line) in state.lines().iter().enumerate() {
-            if index >= state.scroll_offset && index < state.scroll_offset + VISIBLE_ROWS {
-                let visual_row = index - state.scroll_offset;
-                let y = 28 + (visual_row as i32 * 18);
-                let selected = index == state.selected_item;
+        let wt_bg: u16 = if state.oscillators_active { 0x07E0 } else { 0x2945 };
+        let wt_fg: u16 = if state.oscillators_active { 0x0000 } else { 0xFFFF };
+        fb.fill_rect(0, 0, 116, 13, wt_bg);
+        fb.draw_text(3, 3, "WT", wt_fg, wt_bg);
+        let wt_state_str = if state.oscillators_active { "On " } else { "Off" };
+        fb.draw_text(22, 3, wt_state_str, wt_fg, wt_bg);
+        let wt_vol_str = format!("{:3}", state.wt_volume);
+        fb.draw_text(88, 3, &wt_vol_str, wt_fg, wt_bg);
+        let wt_bar_w = (70i32 * state.wt_volume as i32 / 100).max(1);
+        fb.fill_rect(48, 9, 70, 2, 0x0000);
+        fb.fill_rect(48, 9, wt_bar_w, 2, if state.oscillators_active { 0xFFFF } else { 0x8410 });
+
+        fb.fill_rect(116, 0, 8, 13, 0x0000);
+
+        let gr_bg: u16 = if state.granular_active { 0x001F } else { 0x2945 };
+        let gr_fg: u16 = 0xFFFF;
+        fb.fill_rect(124, 0, 116, 13, gr_bg);
+        fb.draw_text(127, 3, "GR", gr_fg, gr_bg);
+        let gr_state_str = if state.granular_active { "On " } else { "Off" };
+        fb.draw_text(146, 3, gr_state_str, gr_fg, gr_bg);
+        let gr_vol_str = format!("{:3}", state.gr_volume);
+        fb.draw_text(212, 3, &gr_vol_str, gr_fg, gr_bg);
+        let gr_bar_w = (70i32 * state.gr_volume as i32 / 100).max(1);
+        fb.fill_rect(172, 9, 70, 2, 0x0000);
+        fb.fill_rect(172, 9, gr_bar_w, 2, if state.granular_active { 0xFFFF } else { 0x8410 });
+
+        let key_octave = format!("{}{}", state.key_name(), state.octave);
+        let scale_name = SCALE_NAMES[state.scale_index];
+        let status = format!("{} {}", key_octave, scale_name);
+        fb.draw_text(4, 16, &status, 0xFFFF, 0x0000);
+
+        fb.fill_rect(0, 26, 240, 2, 0x4208);
+
+        let lines = state.lines();
+        for (index, line) in lines.iter().enumerate() {
+            if index >= scroll_offset && index < scroll_offset + VISIBLE_ROWS {
+                let visual_row = index - scroll_offset;
+                let y = 30 + (visual_row as i32 * 18);
+                let selected = index == selected_item;
                 let bg = if selected { 0x07E0 } else { 0x0000 };
                 let fg = if selected { 0x0000 } else { 0xFFFF };
-                fb.fill_rect(4, y - 2, 232, 14, bg);
-                fb.draw_text(8, y, line, fg, bg);
+                fb.fill_rect(2, y - 2, 236, 14, bg);
+                fb.draw_text(4, y, line, fg, bg);
             }
         }
 
-        self.write_full_framebuffer(&fb.to_bytes())?;
-        Ok(())
-    }
-
-    pub fn draw_redesign(&mut self, state: &MenuState) -> Result<()> {
-        let fb = build_redesign_framebuffer(state, state.selected_item, state.scroll_offset);
         self.write_full_framebuffer(&fb.to_bytes())?;
         Ok(())
     }
@@ -129,7 +156,7 @@ impl St7789Display {
         fb.save_ppm(path)
     }
 
-    pub fn draw_idle_screen(&mut self, state: &MenuState) -> Result<()> {
+    pub fn draw_idle_screen(&mut self, state: &MenuState, hostname: &str) -> Result<()> {
         // Render the idle screen directly into the framebuffer.
         let mut fb = Framebuffer::new(240, 240);
         fb.clear(0x0000);
@@ -183,7 +210,8 @@ impl St7789Display {
             }
         }
 
-        fb.draw_text(44, 226, "Press any key", 0x4208, 0x0000);
+        let x = ((240 - hostname.chars().count() as i32 * 8) / 2).max(0);
+        fb.draw_text(x, 226, hostname, 0x4208, 0x0000);
 
         self.write_full_framebuffer(&fb.to_bytes())?;
         Ok(())

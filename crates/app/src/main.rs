@@ -871,8 +871,12 @@ fn main() -> Result<()> {
     info!("display initialized (DC=BCM9, backlight=BCM13)");
 
     info!("rendering initial menu frame");
-    display.draw_redesign(&menu)?;
+    display.draw_menu(&menu)?;
     info!("startup complete");
+
+    let hostname = std::fs::read_to_string("/etc/hostname")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "pirate-synth".to_string());
 
     const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
     let mut last_activity = Instant::now();
@@ -919,7 +923,7 @@ fn main() -> Result<()> {
                         shutdown_combo_start = None;
                         buttons.sync_state();
                         idle_mode = false;
-                        if let Err(draw_err) = display.draw_redesign(&menu) {
+                        if let Err(draw_err) = display.draw_menu(&menu) {
                             warn!("failed to restore display after shutdown failure: {draw_err}");
                         }
                     }
@@ -939,7 +943,7 @@ fn main() -> Result<()> {
         // Idle timeout: switch to graphical overview screen
         if !idle_mode && last_activity.elapsed() >= IDLE_TIMEOUT {
             idle_mode = true;
-            if let Err(err) = display.draw_idle_screen(&menu) {
+            if let Err(err) = display.draw_idle_screen(&menu, &hostname) {
                 warn!("failed to draw idle screen: {err}");
             }
         }
@@ -975,7 +979,7 @@ fn main() -> Result<()> {
                     }
                 }
                 if redraw {
-                    display.draw_redesign(&menu)?;
+                    display.draw_menu(&menu)?;
                 }
             }
         }
@@ -986,7 +990,7 @@ fn main() -> Result<()> {
             // If idle, any key wakes the display and resumes the menu
             if idle_mode {
                 idle_mode = false;
-                display.draw_redesign(&menu)?;
+                display.draw_menu(&menu)?;
                 std::thread::sleep(Duration::from_millis(25));
                 continue;
             }
@@ -1006,7 +1010,7 @@ fn main() -> Result<()> {
             let old_gr_voices = menu.gr_voices;
 
             menu.apply_button(button);
-            display.draw_redesign(&menu)?;
+            display.draw_menu(&menu)?;
 
             if menu.key_name() != old_key || menu.octave != old_octave {
                 let hz = key_to_frequency_hz(menu.key_name(), menu.octave, 0.0)?;
