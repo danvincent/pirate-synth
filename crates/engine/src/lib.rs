@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use granular::{grain_envelope, sample_linear, spawn_grain, GranularState};
+use granular::{assign_channels, grain_envelope, sample_linear, spawn_grain, GranularState};
 use reverb::Reverb;
 use wavetable::sample_from_banks;
 
@@ -472,11 +472,27 @@ impl Engine {
 
     /// Fade in or out granular synthesis over 5 seconds.
     pub fn set_granular_active(&mut self, active: bool) {
+        if active {
+            if let Some(granular) = self.granular.as_mut() {
+                let n_sources = granular.sources.len();
+                let config = granular.config;
+                let seed = self.rng_state ^ lcg_next(&mut self.rng_state) as u64;
+                assign_channels(granular, &config, n_sources, seed);
+            }
+        }
         self.granular_target_gain = if active { 1.0 } else { 0.0 };
     }
 
     /// Instantly snap granular gain with no fade (use at startup).
     pub fn set_granular_active_immediate(&mut self, active: bool) {
+        if active {
+            if let Some(granular) = self.granular.as_mut() {
+                let n_sources = granular.sources.len();
+                let config = granular.config;
+                let seed = self.rng_state ^ lcg_next(&mut self.rng_state) as u64;
+                assign_channels(granular, &config, n_sources, seed);
+            }
+        }
         let g = if active { 1.0 } else { 0.0 };
         self.granular_gain = g;
         self.granular_target_gain = g;
@@ -531,6 +547,9 @@ impl Engine {
 
     pub fn set_scale(&mut self, mode: ScaleMode, spread_percent: f32) {
         self.scale_mode = mode;
+        if let Some(granular) = self.granular.as_mut() {
+            granular.config.scale_mode = mode;
+        }
         let n = self.oscillators.len();
         let center = (n.saturating_sub(1) as f32) / 2.0;
 
@@ -927,6 +946,7 @@ impl Engine {
                 granular.active_grains.swap_remove(idx);
                 continue;
             }
+            debug_assert!(grain.source_index < granular.sources.len());
             let source = &granular.sources[grain.source_index];
             let source_len = source.samples.len() as f32;
             // Loop the grain window: when we've traversed grain_size_ms of source audio,
@@ -962,7 +982,7 @@ impl Engine {
             let s = sample * source_gain;
             left += s * grain.voice.pan_l;
             right += s * grain.voice.pan_r;
-            grain.sample_offset += grain.playback_ratio;
+            grain.sample_offset += grain.playback_ratio * grain.detune_ratio;
             grain.age_samples += 1;
             idx += 1;
         }
@@ -1012,10 +1032,147 @@ fn key_to_semitone(key: &str) -> Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::granular::GranularChannel;
     use std::{fs, path::Path};
-    use approx::assert_relative_eq;
+    use approx::{assert_relative_eq, relative_eq};
     use std::collections::HashSet;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_granular_sources(count: usize) -> Vec<GranularSource> {
+        (0..count)
+            .map(|i| GranularSource {
+                name: format!("source_{i}"),
+                sample_rate: 48_000,
+                samples: vec![0.0, 0.25, -0.25, 0.5, -0.5, 0.25, -0.25, 0.0],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn unit_should_produce_unique_detune_ratios_when_scale_has_multiple_notes() {
+        let mut config = GranularConfig::default();
+        config.scale_mode = ScaleMode::WholeTone;
+        config.granular_channels = 4;
+        config.granular_pitch_cents = 1200.0;
+        let mut state = GranularState::new(test_granular_sources(3), config);
+
+        super::granular::assign_channels(&mut state, &config, 3, 0x1234);
+
+        assert_eq!(state.channels.len(), 4);
+        let first = state.channels[0].detune_ratio;
+        let any_diff = state
+            .channels
+            .iter()
+            .skip(1)
+            .any(|ch| !relative_eq!(ch.detune_ratio, first, epsilon = 1e-6));
+        assert!(any_diff);
+    }
+
+    #[test]
+    fn unit_should_use_valid_source_indices_when_n_sources_is_given() {
+        let mut config = GranularConfig::default();
+        config.scale_mode = ScaleMode::WholeTone;
+        config.granular_channels = 6;
+        config.granular_pitch_cents = 1200.0;
+        let mut state = GranularState::new(test_granular_sources(3), config);
+
+        super::granular::assign_channels(&mut state, &config, 3, 0xbeef);
+
+        assert!(state.channels.iter().all(|ch| ch.source_index < 3));
+    }
+
+    #[test]
+    fn assign_channels_should_produce_spread_of_one_octave_when_pitch_cents_is_1200() {
+        let mut config = GranularConfig::default();
+        config.scale_mode = ScaleMode::WholeTone;
+        config.granular_channels = 64;
+        config.granular_pitch_cents = 1200.0;
+        let mut state = GranularState::new(test_granular_sources(2), config);
+
+        super::granular::assign_channels(&mut state, &config, 2, 0xdeadbeef);
+
+        let min_ratio = state
+            .channels
+            .iter()
+            .map(|ch| ch.detune_ratio)
+            .fold(f32::INFINITY, f32::min);
+        let max_ratio = state
+            .channels
+            .iter()
+            .map(|ch| ch.detune_ratio)
+            .fold(f32::NEG_INFINITY, f32::max);
+
+        assert!(max_ratio / min_ratio >= 1.9);
+    }
+
+    #[test]
+    fn assign_channels_should_produce_unity_ratios_when_pitch_cents_is_zero() {
+        let mut config = GranularConfig::default();
+        config.scale_mode = ScaleMode::WholeTone;
+        config.granular_channels = 4;
+        config.granular_pitch_cents = 0.0;
+        let mut state = GranularState::new(test_granular_sources(2), config);
+
+        super::granular::assign_channels(&mut state, &config, 2, 0xfeed);
+
+        assert!(state
+            .channels
+            .iter()
+            .all(|ch| relative_eq!(ch.detune_ratio, 1.0, epsilon = 1e-6)));
+    }
+
+    #[test]
+    fn spawn_grain_should_use_first_channel_source_when_channels_assigned() {
+        let mut config = GranularConfig::default();
+        config.max_overlapping_grains = 8;
+        config.granular_channels = 2;
+        config.granular_pitch_cents = 1200.0;
+
+        let mut engine = Engine::new_granular(48_000, 2, test_granular_sources(3), config).unwrap();
+        let granular = engine.granular.as_mut().unwrap();
+        granular.channels = vec![
+            GranularChannel {
+                detune_ratio: 1.0,
+                source_index: 2,
+            },
+            GranularChannel {
+                detune_ratio: 1.0,
+                source_index: 0,
+            },
+        ];
+        granular.channel_counter = 0;
+
+        spawn_grain(granular, &mut engine.oscillators, 48_000.0, 220.0, 0.0);
+
+        assert_eq!(granular.active_grains[0].source_index, 2);
+    }
+
+    #[test]
+    fn spawn_grain_should_use_second_channel_source_when_channels_assigned() {
+        let mut config = GranularConfig::default();
+        config.max_overlapping_grains = 8;
+        config.granular_channels = 2;
+        config.granular_pitch_cents = 1200.0;
+
+        let mut engine = Engine::new_granular(48_000, 2, test_granular_sources(3), config).unwrap();
+        let granular = engine.granular.as_mut().unwrap();
+        granular.channels = vec![
+            GranularChannel {
+                detune_ratio: 1.0,
+                source_index: 2,
+            },
+            GranularChannel {
+                detune_ratio: 1.0,
+                source_index: 0,
+            },
+        ];
+        granular.channel_counter = 0;
+
+        spawn_grain(granular, &mut engine.oscillators, 48_000.0, 220.0, 0.0);
+        spawn_grain(granular, &mut engine.oscillators, 48_000.0, 220.0, 0.0);
+
+        assert_eq!(granular.active_grains[1].source_index, 0);
+    }
 
     #[test]
     fn load_wavetables_cycles_builtins_when_min_count_exceeds_unique_builtin_count() {

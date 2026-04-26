@@ -129,6 +129,10 @@ struct AppConfig {
     granular_note_ms: f32,
     #[serde(default = "default_granular_spawn_jitter")]
     granular_spawn_jitter: f32,
+    #[serde(default = "default_granular_channels")]
+    granular_channels: usize,
+    #[serde(default = "default_granular_pitch_cents")]
+    granular_pitch_cents: f32,
     #[serde(default = "default_granular_wavs")]
     granular_wavs: usize,
     #[serde(default = "default_granular_volume")]
@@ -269,6 +273,12 @@ fn default_granular_note_ms() -> f32 {
 fn default_granular_spawn_jitter() -> f32 {
     0.5
 }
+fn default_granular_channels() -> usize {
+    4
+}
+fn default_granular_pitch_cents() -> f32 {
+    1200.0
+}
 fn default_granular_wavs() -> usize {
     default_oscillators()
 }
@@ -333,6 +343,8 @@ impl Default for AppConfig {
             granular_release_ms: default_granular_release_ms(),
             granular_note_ms: default_granular_note_ms(),
             granular_spawn_jitter: default_granular_spawn_jitter(),
+            granular_channels: default_granular_channels(),
+            granular_pitch_cents: default_granular_pitch_cents(),
             granular_wavs: default_granular_wavs(),
             granular_volume: default_granular_volume(),
             granular_active: default_granular_active(),
@@ -409,6 +421,8 @@ struct UserConfig {
     granular_release_ms: Option<f32>,
     granular_note_ms: Option<f32>,
     granular_spawn_jitter: Option<f32>,
+    granular_channels: Option<usize>,
+    granular_pitch_cents: Option<f32>,
     granular_wavs: Option<usize>,
     granular_volume: Option<u8>,
     granular_active: Option<bool>,
@@ -493,6 +507,12 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         granular_spawn_jitter: user
             .granular_spawn_jitter
             .unwrap_or(base.granular_spawn_jitter),
+        granular_channels: user
+            .granular_channels
+            .unwrap_or(base.granular_channels),
+        granular_pitch_cents: user
+            .granular_pitch_cents
+            .unwrap_or(base.granular_pitch_cents),
         granular_wavs: user.granular_wavs.unwrap_or(base.granular_wavs),
         granular_volume: user.granular_volume.unwrap_or(base.granular_volume),
         granular_active: user.granular_active.unwrap_or(base.granular_active),
@@ -511,6 +531,9 @@ fn granular_config(config: &AppConfig) -> GranularConfig {
         position_jitter: config.granular_position_jitter.clamp(0.0, 1.0),
         envelope_attack_ms: config.granular_attack_ms.max(0.0),
         envelope_release_ms: config.granular_release_ms.max(0.0),
+        scale_mode: scale_mode_from_index(config.scale_index),
+        granular_channels: config.granular_channels,
+        granular_pitch_cents: config.granular_pitch_cents,
     }
 }
 
