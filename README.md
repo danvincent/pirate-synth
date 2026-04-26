@@ -30,6 +30,7 @@ Boot-to-synth Raspberry Pi Zero project for the Pimoroni Pirate Audio Headphone 
 - 13-item ST7789 240×240 display menu via SPI (includes `VIDEO: OFF|ON|NO HDMI` status)
 - First-boot installer for Raspberry Pi OS Lite
 - Offline UI rendering (`--render-ui`) for development without hardware
+- Safe shutdown: hold **Up** and **Down** simultaneously for 5 seconds; the display shows "Powering down" and the system halts cleanly via `shutdown -h now`
 
 ## Build and package in Codespaces/Linux
 
@@ -132,6 +133,7 @@ hdmi_visuals_enabled = false
 ## GPIO/SPI assumptions
 
 - Buttons are active-low on BCM GPIO 5, 6, 16, 24 (mapped to Up/Down/Select/Back)
+- Holding Up + Down together for 5 seconds triggers a safe system shutdown (display shows "Powering down")
 - Display uses ST7789 over SPI device `/dev/spidev0.1`
 - Display control pins: DC BCM9, backlight BCM13
 - Runtime access is through `rppal` (GPIO character-device `/dev/gpiomem` + SPI `/dev/spidev*`), not legacy `/sys/class/gpio`

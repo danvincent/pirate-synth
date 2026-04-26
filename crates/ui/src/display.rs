@@ -99,41 +99,13 @@ impl St7789Display {
             }
         }
 
-        self.command(0x2A, &[0x00, 0x00, 0x00, 0xEF])?;
-        self.command(0x2B, &[0x00, 0x00, 0x00, 0xEF])?;
-        self.dc.set_low();
-        self.spi
-            .write(&[0x2C])
-            .map(|_| ())
-            .context("failed writing ST7789 RAMWR command")?;
-        self.dc.set_high();
-        let bytes = fb.to_bytes();
-        write_in_chunks(&bytes, SPI_FRAMEBUFFER_CHUNK_SIZE, |chunk| {
-            self.spi
-                .write(chunk)
-                .map(|_| ())
-                .context("failed writing ST7789 framebuffer chunk")
-        })?;
+        self.write_full_framebuffer(&fb.to_bytes())?;
         Ok(())
     }
 
     pub fn draw_redesign(&mut self, state: &MenuState) -> Result<()> {
         let fb = build_redesign_framebuffer(state, state.selected_item, state.scroll_offset);
-        self.command(0x2A, &[0x00, 0x00, 0x00, 0xEF])?;
-        self.command(0x2B, &[0x00, 0x00, 0x00, 0xEF])?;
-        self.dc.set_low();
-        self.spi
-            .write(&[0x2C])
-            .map(|_| ())
-            .context("failed writing ST7789 RAMWR command")?;
-        self.dc.set_high();
-        let bytes = fb.to_bytes();
-        write_in_chunks(&bytes, SPI_FRAMEBUFFER_CHUNK_SIZE, |chunk| {
-            self.spi
-                .write(chunk)
-                .map(|_| ())
-                .context("failed writing ST7789 framebuffer chunk")
-        })?;
+        self.write_full_framebuffer(&fb.to_bytes())?;
         Ok(())
     }
 
@@ -213,6 +185,29 @@ impl St7789Display {
 
         fb.draw_text(44, 226, "Press any key", 0x4208, 0x0000);
 
+        self.write_full_framebuffer(&fb.to_bytes())?;
+        Ok(())
+    }
+
+    pub fn draw_powering_down_screen(&mut self) -> Result<()> {
+        let mut fb = Framebuffer::new(240, 240);
+        fb.clear(0x0000);
+
+        let line1 = "Powering";
+        let line1_w = line1.chars().count() as i32 * 16;
+        let line1_x = (240 - line1_w) / 2;
+        fb.draw_text_2x(line1_x, 96, line1, 0xF800, 0x0000);
+
+        let line2 = "down";
+        let line2_w = line2.chars().count() as i32 * 16;
+        let line2_x = (240 - line2_w) / 2;
+        fb.draw_text_2x(line2_x, 122, line2, 0xF800, 0x0000);
+
+        self.write_full_framebuffer(&fb.to_bytes())?;
+        Ok(())
+    }
+
+    fn write_full_framebuffer(&mut self, bytes: &[u8]) -> Result<()> {
         self.command(0x2A, &[0x00, 0x00, 0x00, 0xEF])?;
         self.command(0x2B, &[0x00, 0x00, 0x00, 0xEF])?;
         self.dc.set_low();
@@ -221,14 +216,12 @@ impl St7789Display {
             .map(|_| ())
             .context("failed writing ST7789 RAMWR command")?;
         self.dc.set_high();
-        let bytes = fb.to_bytes();
-        write_in_chunks(&bytes, SPI_FRAMEBUFFER_CHUNK_SIZE, |chunk| {
+        write_in_chunks(bytes, SPI_FRAMEBUFFER_CHUNK_SIZE, |chunk| {
             self.spi
                 .write(chunk)
                 .map(|_| ())
-                .context("failed writing ST7789 idle screen framebuffer chunk")
-        })?;
-        Ok(())
+                .context("failed writing ST7789 framebuffer chunk")
+        })
     }
 }
 
