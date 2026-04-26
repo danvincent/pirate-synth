@@ -162,7 +162,9 @@ pub(crate) fn spawn_grain(
         let channel_idx = granular.channel_counter % granular.channels.len();
         granular.channel_counter = granular.channel_counter.wrapping_add(1);
         let channel = &granular.channels[channel_idx];
-        (channel.source_index % granular.sources.len(), channel.detune_ratio)
+        let active = granular.configured_wavs.max(1).min(granular.sources.len());
+        let source_index = (granular.source_offset + channel.source_index % active) % granular.sources.len();
+        (source_index, channel.detune_ratio)
     };
     debug_assert!(source_index < granular.sources.len());
     let source = &granular.sources[source_index];

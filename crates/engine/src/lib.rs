@@ -964,7 +964,7 @@ impl Engine {
             if grain.window_source_samples >= 2
                 && grain.sample_offset >= grain.window_source_samples as f32
             {
-                grain.sample_offset -= grain.window_source_samples as f32;
+                grain.sample_offset = grain.sample_offset.rem_euclid(grain.window_source_samples as f32);
                 // Jump to a fresh random position within [position, position + position_jitter]
                 // so every window loop plays a different part of the source.
                 let rnd = lcg_next(&mut grain.rng_state) as f32 / u32::MAX as f32;
