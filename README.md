@@ -11,6 +11,8 @@ Boot-to-synth Raspberry Pi Zero project for the [Pimoroni Pirate Audio Headphone
 - `crates/engine` - wavetable oscillator engine + key-to-frequency tuning
 - `crates/audio_alsa` - ALSA playback loop
 - `crates/ui` - ST7789 menu renderer + Pirate Audio buttons (active-low GPIO)
+- `crates/controller` - debounced synth controller; bridges UI state to audio commands
+- `crates/visuals_drm` - HDMI scope/visualizer (DRM)
 - `crates/app` - synth binary wiring config, UI, and audio
 - `assets/wavetables` - source wavetable files
 - `assets/WAV` - granular source WAV files (PCM16/float32), including a default `placeholder.wav`
@@ -28,8 +30,8 @@ Boot-to-synth Raspberry Pi Zero project for the [Pimoroni Pirate Audio Headphone
 - Effects: reverb (Schroeder), tremolo, crossfade, filter sweep, FM, subtractive
 - Class-compliant USB MIDI keyboard note input (monophonic, most recent note latches key/octave)
 - MIDI CC control for cents detune (`midi_cents_cc` in config)
-- 9 scale modes (chromatic, major, minor, pentatonic, dorian, etc.)
-- 13-item ST7789 240×240 display menu via SPI (includes `VIDEO: OFF|ON|NO HDMI` status)
+- 9 scale modes (N/A, major, minor, pentatonic, dorian, etc.)
+- 14-item ST7789 240×240 display menu via SPI (includes `VIDEO: OFF|ON|NO HDMI` status)
 - First-boot installer for Raspberry Pi OS Lite
 - Offline UI rendering (`--render-ui`) for development without hardware
 - Safe shutdown: hold **Up** and **Down** simultaneously for 5 seconds; the display shows "Powering down" and the system halts cleanly via `shutdown -h now`
@@ -85,24 +87,70 @@ Installer actions:
 - Copies wavetables to `/var/lib/pirate-synth/wavetables`
 - Copies granular WAV sources to `/var/lib/pirate-synth/WAV`
 - Enables `pirate-synth.service`
-- Reboots
+- Reboots (only if `config.txt` was changed to apply device-tree settings; otherwise restarts `pirate-synth.service` immediately)
 
 ## Config
 
 Config file: `/etc/pirate-synth/config.toml`
 
-Default values:
+The installed config.toml is fully commented and contains all available settings. Code defaults (used when a key is absent from the config file) are shown below for reference; the shipped config.toml overrides many of these for the target hardware.
 
 ```toml
 sample_rate = 48000
 buffer_frames = 256
-oscillators = 8
+spi_device = "/dev/spidev0.1"
+
 root_key = "A"
 root_octave = 1
-fine_tune_cents = 0
+fine_tune_cents = 0.0
 midi_cents_cc = 1
+
+scale_index = 7          # 0=N/A 1=Major 2=Minor 3=Penta 4=Dorian 5=Mixo 6=Whole 7=Hirajoshi 8=Lydian
+stereo_spread = 100      # 0–100
+
+oscillators = 8
+oscillators_active = false
 wavetable_dir = "/var/lib/pirate-synth/wavetables"
+bank_index = 0           # 0=A 1=B 2=C 3=D
+
+volume = 50              # master output 0–100
+
+transition_secs = 3.0    # smooth transition duration for cents/scale/bank changes
+note_transition_ms = 0.0 # glide time in ms; 0 = snap immediately
+
+reverb_enabled = true
+reverb_wet = 0.20
+reverb_feedback = 0.84
+reverb_damp = 0.20
+reverb_comb_count = 4
+
+granular_reverb_enabled = true
+granular_reverb_wet = 0.45
+granular_reverb_feedback = 0.88
+granular_reverb_damp = 0.12
+granular_reverb_comb_count = 8
+
+tremolo_enabled = true
+tremolo_depth = 0.35
+
+crossfade_enabled = true
+crossfade_rate = 0.05
+
+filter_sweep_enabled = true
+filter_sweep_min = 0.15
+filter_sweep_max = 0.80
+filter_sweep_rate_hz = 0.008
+
+fm_enabled = false
+fm_depth = 0.15
+
+subtractive_enabled = false
+subtractive_depth = 0.30
+
 wav_dir = "/var/lib/pirate-synth/WAV"
+granular_active = false
+granular_wavs = 8
+granular_volume = 50
 granular_grain_size_ms = 120.0
 granular_density_hz = 24.0
 granular_max_overlap = 16
@@ -110,26 +158,32 @@ granular_position = 0.5
 granular_position_jitter = 0.15
 granular_attack_ms = 10.0
 granular_release_ms = 25.0
-granular_wavs = 8
-granular_volume = 50
-granular_active = false
+granular_note_ms = 4000.0
+granular_spawn_jitter = 0.5
+
 hdmi_visuals_enabled = false
 ```
 
-- `oscillators` controls simultaneous oscillators (allocated at startup)
+- `oscillators` controls simultaneous oscillators (allocated at startup); `oscillators_active` sets whether the wavetable layer starts active at boot
 - `root_key`, `root_octave`, `fine_tune_cents` tune the drone via the UI
 - USB MIDI note-on updates `root_key` and `root_octave` live (note-off is ignored so notes latch)
 - `midi_cents_cc` defines which MIDI CC number (0-127) controls `fine_tune_cents` from -100 to +100
-- Engine selection is automatic by source-folder origin:
+- `scale_index` selects the scale mode (0=N/A means no scale constraint / free chromatic)
+- `stereo_spread` (0–100) controls how wide oscillators are spread across the stereo field
+- `bank_index` selects which wavetable bank (0=A, 1=B, 2=C, 3=D) is active at startup
+- `volume` sets the master output level (0–100)
+- `transition_secs` smooths cents/scale/bank changes over that many seconds (±20% per-oscillator jitter)
+- `note_transition_ms` sets the glide time in milliseconds for note/frequency changes (0 = snap)
+- Engine selection is automatic by source-folder contents:
   - if `wav_dir` contains `.wav` files, granular synthesis mode is used
   - otherwise the wavetable engine uses `wavetable_dir`
 - Granular mode currently supports WAV PCM16 and float32 sources (TODO: add more WAV variants/modulation features)
-- `granular_wavs` controls the number of active granular source lanes (adjustable as `GR VOICES` in the UI):
+- `granular_wavs` controls the number of active granular source lanes (adjustable as `GR Voices` in the UI):
   - `0` disables granular playback
   - values above loaded WAV file count round-robin the available files
-- `granular_volume` sets the initial granular output level (0–100); adjustable as `GR VOL` in the UI
-- `granular_active` sets whether the granular layer starts active at boot; toggleable as `GRANULAR` in the UI
-- `hdmi_visuals_enabled` gates HDMI visualizer startup (`VIDEO: OFF|ON|NO HDMI` in the UI)
+- `granular_volume` sets the initial granular output level (0–100); adjustable as `GR Vol` in the UI
+- `granular_active` sets whether the granular layer starts active at boot; toggleable as `Granular` in the UI
+- `hdmi_visuals_enabled` gates HDMI visualizer startup (`Video: Off/On/No HDMI` in the UI)
 - Both layers can be active simultaneously; their volumes are mixed independently
 
 ## GPIO/SPI assumptions
