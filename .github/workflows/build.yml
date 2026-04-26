@@ -6,12 +6,15 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   package:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install system dependencies
         run: |
@@ -26,9 +29,9 @@ jobs:
           sudo sed -i '/^Types: deb/a Architectures: amd64' \
             /etc/apt/sources.list.d/ubuntu.sources
           printf '%s\n' \
-            "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME} main restricted universe" \
-            "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME}-updates main restricted universe" \
-            "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME}-security main restricted universe" \
+            "deb [arch=armhf] https://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME} main restricted universe" \
+            "deb [arch=armhf] https://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME}-updates main restricted universe" \
+            "deb [arch=armhf] https://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME}-security main restricted universe" \
             | sudo tee /etc/apt/sources.list.d/armhf-ports.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -41,10 +44,17 @@ jobs:
             zip
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
 
       - name: Run focused tests
         run: cargo test -p engine -p ui -p pirate_synth
+
+      - name: SonarCloud Scan
+        if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: SonarSource/sonarqube-scan-action@299e4b793aaa83bf2aba7c9c14bedbb485688ec4 # v7.1.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
       - name: Build ARMv6 binary (Pi Zero / Zero W)
         run: |
