@@ -73,6 +73,11 @@ pub(crate) fn lcg_next(state: &mut u64) -> u32 {
     ((*state >> 33) ^ (*state >> 17)) as u32
 }
 
+#[inline]
+fn hann_window(phase: f32) -> f32 {
+    0.5 * (1.0 - (std::f32::consts::TAU * phase).cos())
+}
+
 
 pub struct Engine {
     sample_rate: u32,
@@ -945,8 +950,14 @@ impl Engine {
                 granular.active_grains.swap_remove(idx);
                 continue;
             }
-            let envelope = grain_envelope(grain);
-            let sample = sample_linear(&source.samples, pos) * envelope;
+            let life_env = grain_envelope(grain);
+            // Apply Hann window within the window loop to eliminate clicks at wrap boundaries.
+            // window_phase goes 0.0 → 1.0 across grain.window_source_samples.
+            // At both boundaries (phase 0.0 and 1.0), Hann envelope = 0.0, making wraps inaudible.
+            debug_assert!(grain.window_source_samples >= 1, "window_source_samples must be >= 1 to avoid NaN");
+            let window_phase = (grain.sample_offset / grain.window_source_samples as f32).clamp(0.0, 1.0);
+            let window_env = hann_window(window_phase);
+            let sample = sample_linear(&source.samples, pos) * life_env * window_env;
             let source_gain = granular.source_voices[grain.source_index].gain;
             let s = sample * source_gain;
             left += s * grain.voice.pan_l;
@@ -2859,5 +2870,87 @@ mod tests {
              Buggy code divides by fixed max_overlapping_grains=16, so early_mean ≈ 0.25 and late_mean ≈ 0.5, giving ratio ≈ 2.0",
             late_mean, early_mean, ratio
         );
+    }
+
+    #[test]
+    fn hann_window_should_be_zero_at_start_boundary() {
+        let window_env = hann_window(0.0);
+        assert_relative_eq!(window_env, 0.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn hann_window_should_be_zero_at_end_boundary() {
+        let window_env = hann_window(1.0);
+        assert_relative_eq!(window_env, 0.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn hann_window_should_be_one_at_window_midpoint() {
+        // Test the Hann window formula at midpoint: phase = 0.5
+        // At phase = 0.5: 0.5 * (1.0 - cos(PI)) = 0.5 * (1.0 - (-1.0)) = 1.0
+        let phase_mid = 0.5f32;
+        let window_mid = hann_window(phase_mid);
+        assert_relative_eq!(window_mid, 1.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn render_granular_frame_normalized_should_not_produce_large_sample_jumps_when_window_wraps() {
+        // Integration test: verify that window wraps do not produce audible clicks.
+        // Clicks manifest as large discontinuities (steps > 0.2 between consecutive samples).
+        // Before the fix: window wrap causes jump from waveform value X to completely different Y.
+        // After the fix: both sides are at Hann envelope ≈ 0.0, making the step inaudible.
+        //
+        // Use a sine wave source (smooth, natural waveform) to isolate window wrap effects.
+        // This eliminates the square wave's inherent large steps (±1.6 per sample).
+        let source = GranularSource {
+            name: "sine_test".to_string(),
+            sample_rate: 48_000,
+            samples: (0..48_000)
+                .map(|i| {
+                    let phase = (i as f32 / 48_000.0) * std::f32::consts::TAU;
+                    phase.sin() * 0.8
+                })
+                .collect(),
+        };
+
+        let mut config = GranularConfig::default();
+        config.grain_size_ms = 50.0; // 2400 samples per window at 48kHz
+        config.grain_note_ms = 1000.0; // 1000ms = ~20 window wraps
+        config.grain_density_hz = 2.0; // 2 grains per second
+        config.max_overlapping_grains = 16;
+        config.envelope_attack_ms = 0.0; // No attack/release to isolate window wrap effect
+        config.envelope_release_ms = 0.0;
+
+        let mut engine = Engine::new_granular(48_000, 2, vec![source], config).unwrap();
+        engine.set_granular_wavs(1);
+        engine.set_frequency(220.0);
+        engine.set_granular_active_immediate(true);
+
+        // Render ~2 seconds of audio
+        let mut out = vec![0i16; 48_000 * 2];
+        engine.render_i16_stereo(&mut out);
+
+        // Convert to f32 and check consecutive sample differences
+        let samples_f32: Vec<f32> = out.iter().map(|s| *s as f32 / 32768.0).collect();
+
+        // Find maximum absolute step between consecutive samples
+        let mut max_step = 0.0f32;
+        for i in 0..samples_f32.len().saturating_sub(1) {
+            let step = (samples_f32[i + 1] - samples_f32[i]).abs();
+            max_step = max_step.max(step);
+        }
+
+        // Without the Hann window fix, max_step would be 0.3–0.9 (hard click at wrap).
+        // With the fix, max_step should be 0.2 or less (Hann envelope smooths wrap boundaries).
+        assert!(
+            max_step <= 0.2,
+            "max consecutive sample step is {:.4}, should be <= 0.2 (no audible clicks). \
+             Large steps indicate window wrap clicks are present.",
+            max_step
+        );
+
+        // Verify output is not silent (should have audible content)
+        let mean_abs: f32 = samples_f32.iter().map(|s| s.abs()).sum::<f32>() / samples_f32.len() as f32;
+        assert!(mean_abs > 0.01, "output should not be silent; mean_abs = {mean_abs:.6}");
     }
 }
