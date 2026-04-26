@@ -897,17 +897,19 @@ fn main() -> Result<()> {
                         warn!("failed to draw powering down screen: {err}");
                     }
                     std::thread::sleep(Duration::from_millis(500));
+                    // Stop audio and blank the display immediately so no audio or
+                    // stale pixels persist while the OS is halting.
+                    if let Err(err) = audio_tx.send_timeout(AudioCommand::Stop, Duration::from_millis(200)) {
+                        warn!("failed to send stop to audio thread before shutdown: {err}");
+                    }
+                    if let Err(err) = display.clear_and_backlight_off() {
+                        warn!("failed to clear display before shutdown: {err}");
+                    }
                     let shutdown_failed = match std::process::Command::new("/sbin/shutdown")
                         .args(["-h", "now"])
                         .status()
                     {
                         Ok(status) if status.success() => {
-                            if let Err(err) = audio_tx.send_timeout(AudioCommand::Stop, Duration::from_millis(200)) {
-                                warn!("failed to send stop to audio thread before shutdown: {err}");
-                            }
-                            if let Err(err) = display.clear_and_backlight_off() {
-                                warn!("failed to clear display before shutdown: {err}");
-                            }
                             break;
                         }
                         Ok(status) => {
