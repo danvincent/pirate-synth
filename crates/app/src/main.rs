@@ -877,8 +877,62 @@ fn main() -> Result<()> {
     const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
     let mut last_activity = Instant::now();
     let mut idle_mode = false;
+    const SHUTDOWN_HOLD_DURATION: Duration = Duration::from_secs(5);
+    let mut shutdown_combo_start: Option<Instant> = None;
 
     loop {
+        // Shutdown combo: Up + Down held together for 5 seconds triggers a safe shutdown.
+        // Checked before the idle logic so the combo is not interrupted by the idle screen.
+        let raw = buttons.raw_states();
+        if raw[0] && raw[1] {
+            last_activity = Instant::now();
+            match shutdown_combo_start {
+                None => shutdown_combo_start = Some(Instant::now()),
+                Some(start) if start.elapsed() >= SHUTDOWN_HOLD_DURATION => {
+                    if let Err(err) = display.draw_powering_down_screen() {
+                        warn!("failed to draw powering down screen: {err}");
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                    let shutdown_failed = match std::process::Command::new("/sbin/shutdown")
+                        .args(["-h", "now"])
+                        .status()
+                    {
+                        Ok(status) if status.success() => {
+                            if let Err(err) = audio_tx.send_timeout(AudioCommand::Stop, Duration::from_millis(200)) {
+                                warn!("failed to send stop to audio thread before shutdown: {err}");
+                            }
+                            break;
+                        }
+                        Ok(status) => {
+                            warn!("/sbin/shutdown exited with non-zero status: {status}");
+                            true
+                        }
+                        Err(err) => {
+                            warn!("failed to invoke /sbin/shutdown: {err}");
+                            true
+                        }
+                    };
+                    if shutdown_failed {
+                        shutdown_combo_start = None;
+                        buttons.sync_state();
+                        idle_mode = false;
+                        if let Err(draw_err) = display.draw_redesign(&menu) {
+                            warn!("failed to restore display after shutdown failure: {draw_err}");
+                        }
+                    }
+                }
+                Some(_) => {}
+            }
+            synth.poll();
+            std::thread::sleep(Duration::from_millis(25));
+            continue;
+        } else if shutdown_combo_start.is_some() {
+            shutdown_combo_start = None;
+            // Sync last-state so the next poll_pressed call does not see a spurious
+            // rising edge from a button that was still held when the combo was cancelled.
+            buttons.sync_state();
+        }
+
         // Idle timeout: switch to graphical overview screen
         if !idle_mode && last_activity.elapsed() >= IDLE_TIMEOUT {
             idle_mode = true;
