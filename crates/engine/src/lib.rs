@@ -962,7 +962,7 @@ impl Engine {
             voice.ramp_gain(fade_rate);
         }
 
-        let grain_norm = granular.config.max_overlapping_grains.max(1) as f32;
+        let grain_norm = granular.active_grains.len().max(1) as f32;
         (
             (left / grain_norm).clamp(-1.0, 1.0),
             (right / grain_norm).clamp(-1.0, 1.0),
@@ -2690,5 +2690,174 @@ mod tests {
         let processed_l = dry * input + wet * mono_out;
         let processed_r = dry * input + wet * mono_out;
         assert_eq!(processed_l, processed_r, "symmetric input should yield symmetric output with mono reverb send");
+    }
+
+    #[test]
+    fn render_granular_frame_normalized_should_produce_audible_output_when_pool_is_sparse() {
+        // Test that when only 1-2 grains are active, the normalized output is NOT quiet.
+        // With low density (10 Hz, spawn every 100ms) and 50ms render,
+        // the pool hasn't filled yet, so we have at most 1-2 grains active.
+        //
+        // With FIXED code (divide by active_grains.len() = 1–2):
+        //   peak amplitude ≈ 0.8 / 1.5 ≈ 0.53 → test passes
+        //
+        // With BUGGY code (divide by max_overlapping_grains = 16):
+        //   peak amplitude ≈ 0.8 / 16 ≈ 0.05 → test fails (peak < 0.4)
+        let source = GranularSource {
+            name: "test_sine".to_string(),
+            sample_rate: 48_000,
+            samples: vec![0.8; 48_000], // constant 0.8 amplitude
+        };
+        let mut config = GranularConfig::default();
+        config.grain_density_hz = 10.0; // spawn every 100ms; ~1 grain per render
+        config.grain_size_ms = 100.0;
+        config.grain_note_ms = 3000.0; // 3-second grains persist after spawning
+        config.max_overlapping_grains = 16;
+        config.envelope_attack_ms = 0.0;
+        config.envelope_release_ms = 0.0;
+
+        let mut engine = Engine::new_granular(48_000, 2, vec![source], config).unwrap();
+        engine.set_granular_wavs(1); // enable the granular source
+        engine.set_frequency(220.0);
+
+        // Render multiple frames to accumulate grains within the 1-2 range
+        let mut out = [0i16; 5000 * 2];
+        engine.render_i16_stereo(&mut out);
+
+        // Find peak absolute amplitude
+        let peak = out.iter().map(|s| ((*s as f32) / 32768.0).abs()).fold(0.0, f32::max);
+
+        // With fixed code: divide by 1–2 grains → peak >= 0.3 ✓
+        // With buggy code: divide by 16 → peak ≈ 0.05 ✗
+        assert!(
+            peak >= 0.3,
+            "peak amplitude {} should be >= 0.3 (dividing by 1–2 active grains). \
+             Buggy code divides by fixed max_overlapping_grains=16, giving peak ≈ 0.05",
+            peak
+        );
+    }
+
+    #[test]
+    fn render_granular_frame_normalized_should_be_audible_when_pool_is_filling() {
+        // Test that output amplitude during the fill phase is audible.
+        // With moderate-high density (8 Hz), the pool fills over ~1 second.
+        // During early fill phase, verify granular output is not silenced.
+        //
+        // With FIXED code (divide by active_grains.len()):
+        //   - Early phase (1s): ~8 grains active, all divide individually → output ≈ 0.5
+        //   - early_mean >= 0.15 ✓
+        //
+        // With BUGGY code (divide by max_overlapping_grains = 16):
+        //   - Early phase: left ≈ 4.0 (8 grains * 0.5), divide by 16 → output ≈ 0.25
+        //   - early_mean ≈ 0.08-0.12 (depending on grain timing and spawning)
+        //   - Fails to reach 0.15 threshold with good margin
+        let source = GranularSource {
+            name: "test_sine".to_string(),
+            sample_rate: 48_000,
+            samples: vec![0.5; 48_000], // moderate amplitude
+        };
+        let mut config = GranularConfig::default();
+        config.grain_density_hz = 8.0; // spawn ~8 grains per second
+        config.grain_size_ms = 100.0;
+        config.grain_note_ms = 3000.0; // 3-second grains (fills pool in ~1 second)
+        config.max_overlapping_grains = 16;
+        config.envelope_attack_ms = 0.0;
+        config.envelope_release_ms = 0.0;
+
+        let mut engine = Engine::new_granular(48_000, 2, vec![source], config).unwrap();
+        engine.set_granular_wavs(1); // enable the granular source
+        engine.set_frequency(220.0);
+
+        // Render first second (early phase: pool filling)
+        let frames_per_second = 48_000;
+        let mut out_early = vec![0i16; frames_per_second * 2];
+        engine.render_i16_stereo(&mut out_early);
+
+        // Compute mean absolute value for early phase
+        let mean_abs = |buf: &[i16]| {
+            buf.iter()
+                .map(|s| (*s as f32 / 32768.0).abs())
+                .sum::<f32>()
+                / buf.len() as f32
+        };
+
+        let early_mean = mean_abs(&out_early);
+
+        // Verify early phase is audible (not being silenced by buggy normalization)
+        assert!(
+            early_mean >= 0.15,
+            "early_mean {} should be >= 0.15 (granular should be audible from start). \
+             Buggy code divides by fixed max_overlapping_grains=16, making early phase too quiet",
+            early_mean
+        );
+    }
+
+    #[test]
+    fn render_granular_frame_normalized_should_maintain_stable_amplitude_when_pool_fills() {
+        // Test that output amplitude remains stable as the grain pool fills.
+        // With moderate-high density (8 Hz), the pool fills over ~1 second.
+        // Verify that early and late phase amplitudes remain proportional (ratio < 1.5).
+        //
+        // With FIXED code (divide by active_grains.len()):
+        //   - Early phase (1s): ~8 grains active, all divide individually → output ≈ 0.5
+        //   - Late phase (3s): ~16 grains active, all divide individually → output ≈ 0.5
+        //   - Ratio late_mean / early_mean ≈ 1.0 ✓
+        //
+        // With BUGGY code (divide by max_overlapping_grains = 16):
+        //   - Early phase: left ≈ 4.0 (8 grains * 0.5), divide by 16 → output ≈ 0.25
+        //   - Late phase: left ≈ 8.0 (16 grains * 0.5), divide by 16 → output ≈ 0.5
+        //   - Ratio late_mean / early_mean ≈ 2.0 ✗ (fails the < 1.5 threshold)
+        let source = GranularSource {
+            name: "test_sine".to_string(),
+            sample_rate: 48_000,
+            samples: vec![0.5; 48_000], // moderate amplitude
+        };
+        let mut config = GranularConfig::default();
+        config.grain_density_hz = 8.0; // spawn ~8 grains per second
+        config.grain_size_ms = 100.0;
+        config.grain_note_ms = 3000.0; // 3-second grains (fills pool in ~1 second)
+        config.max_overlapping_grains = 16;
+        config.envelope_attack_ms = 0.0;
+        config.envelope_release_ms = 0.0;
+
+        let mut engine = Engine::new_granular(48_000, 2, vec![source], config).unwrap();
+        engine.set_granular_wavs(1); // enable the granular source
+        engine.set_frequency(220.0);
+
+        // Render 3 seconds of audio split into early and late phases
+        let frames_per_second = 48_000;
+        let mut out_early = vec![0i16; frames_per_second * 2];
+        let mut out_late = vec![0i16; frames_per_second * 2];
+
+        // Render first second (early phase: pool filling)
+        engine.render_i16_stereo(&mut out_early);
+
+        // Render second second (pool continues filling)
+        let mut out_mid = vec![0i16; frames_per_second * 2];
+        engine.render_i16_stereo(&mut out_mid);
+
+        // Render third second (late phase: pool full, expiring grains replaced)
+        engine.render_i16_stereo(&mut out_late);
+
+        // Compute mean absolute value for early and late phases
+        let mean_abs = |buf: &[i16]| {
+            buf.iter()
+                .map(|s| (*s as f32 / 32768.0).abs())
+                .sum::<f32>()
+                / buf.len() as f32
+        };
+
+        let early_mean = mean_abs(&out_early);
+        let late_mean = mean_abs(&out_late);
+
+        // Verify amplitude ratio is close to 1.0 (stable amplitude)
+        assert!(early_mean > 0.0, "early phase produced silence — grain spawning may be broken");
+        let ratio = late_mean / early_mean;
+        assert!(
+            ratio < 1.5,
+            "late_mean {} / early_mean {} = {:.2}; should be < 1.5 (stable amplitude). \
+             Buggy code divides by fixed max_overlapping_grains=16, so early_mean ≈ 0.25 and late_mean ≈ 0.5, giving ratio ≈ 2.0",
+            late_mean, early_mean, ratio
+        );
     }
 }
