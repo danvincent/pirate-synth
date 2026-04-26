@@ -36,6 +36,15 @@ impl ButtonReader {
         Ok(None)
     }
 
+    /// Returns the raw low-level state of all four button pins as a `[bool; 4]`.
+    ///
+    /// Index mapping (matches the ordering used by [`Self::poll_pressed`]):
+    /// - `[0]` → [`Button::Up`]
+    /// - `[1]` → [`Button::Down`]
+    /// - `[2]` → [`Button::Select`]
+    /// - `[3]` → [`Button::Back`]
+    ///
+    /// `true` means the button is currently pressed (pin is low / active-low).
     pub fn raw_states(&self) -> [bool; 4] {
         [
             self.pins[0].is_low(),

@@ -870,33 +870,31 @@ fn main() -> Result<()> {
                         warn!("failed to draw powering down screen: {err}");
                     }
                     std::thread::sleep(Duration::from_millis(500));
-                    match std::process::Command::new("/sbin/shutdown")
+                    let shutdown_failed = match std::process::Command::new("/sbin/shutdown")
                         .args(["-h", "now"])
                         .status()
                     {
                         Ok(status) if status.success() => {
-                            if let Err(err) = audio_tx.send(AudioCommand::Stop) {
+                            if let Err(err) = audio_tx.send_timeout(AudioCommand::Stop, Duration::from_millis(200)) {
                                 warn!("failed to send stop to audio thread before shutdown: {err}");
                             }
                             break;
                         }
                         Ok(status) => {
                             warn!("/sbin/shutdown exited with non-zero status: {status}");
-                            shutdown_combo_start = None;
-                            buttons.sync_state();
-                            idle_mode = false;
-                            if let Err(draw_err) = display.draw_redesign(&menu) {
-                                warn!("failed to restore display after shutdown failure: {draw_err}");
-                            }
+                            true
                         }
                         Err(err) => {
                             warn!("failed to invoke /sbin/shutdown: {err}");
-                            shutdown_combo_start = None;
-                            buttons.sync_state();
-                            idle_mode = false;
-                            if let Err(draw_err) = display.draw_redesign(&menu) {
-                                warn!("failed to restore display after shutdown failure: {draw_err}");
-                            }
+                            true
+                        }
+                    };
+                    if shutdown_failed {
+                        shutdown_combo_start = None;
+                        buttons.sync_state();
+                        idle_mode = false;
+                        if let Err(draw_err) = display.draw_redesign(&menu) {
+                            warn!("failed to restore display after shutdown failure: {draw_err}");
                         }
                     }
                 }
