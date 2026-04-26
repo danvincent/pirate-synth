@@ -532,8 +532,8 @@ fn granular_config(config: &AppConfig) -> GranularConfig {
         envelope_attack_ms: config.granular_attack_ms.max(0.0),
         envelope_release_ms: config.granular_release_ms.max(0.0),
         scale_mode: scale_mode_from_index(config.scale_index),
-        granular_channels: config.granular_channels,
-        granular_pitch_cents: config.granular_pitch_cents,
+        granular_channels: config.granular_channels.clamp(1, 64),
+        granular_pitch_cents: config.granular_pitch_cents.clamp(-2400.0, 2400.0),
     }
 }
 
