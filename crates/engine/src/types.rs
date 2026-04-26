@@ -36,6 +36,9 @@ pub struct GranularConfig {
     pub position_jitter: f32,
     pub envelope_attack_ms: f32,
     pub envelope_release_ms: f32,
+    pub scale_mode: ScaleMode,
+    pub granular_channels: usize,
+    pub granular_pitch_cents: f32,
 }
 
 impl Default for GranularConfig {
@@ -50,6 +53,9 @@ impl Default for GranularConfig {
             position_jitter: 0.15,
             envelope_attack_ms: 500.0,
             envelope_release_ms: 500.0,
+            scale_mode: ScaleMode::None,
+            granular_channels: 4,
+            granular_pitch_cents: 1200.0,
         }
     }
 }

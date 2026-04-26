@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use granular::{grain_envelope, sample_linear, spawn_grain, GranularState};
+use granular::{assign_channels, grain_envelope, sample_linear, spawn_grain, GranularState};
 use reverb::Reverb;
 use wavetable::sample_from_banks;
 
@@ -71,6 +71,11 @@ pub(crate) fn lcg_next(state: &mut u64) -> u32 {
         .wrapping_mul(6364136223846793005)
         .wrapping_add(1442695040888963407);
     ((*state >> 33) ^ (*state >> 17)) as u32
+}
+
+#[inline]
+fn hann_window(phase: f32) -> f32 {
+    0.5 * (1.0 - (std::f32::consts::TAU * phase).cos())
 }
 
 
@@ -467,11 +472,27 @@ impl Engine {
 
     /// Fade in or out granular synthesis over 5 seconds.
     pub fn set_granular_active(&mut self, active: bool) {
+        if active {
+            if let Some(granular) = self.granular.as_mut() {
+                let n_sources = granular.sources.len();
+                let config = granular.config;
+                let seed = self.rng_state ^ lcg_next(&mut self.rng_state) as u64;
+                assign_channels(granular, &config, n_sources, seed);
+            }
+        }
         self.granular_target_gain = if active { 1.0 } else { 0.0 };
     }
 
     /// Instantly snap granular gain with no fade (use at startup).
     pub fn set_granular_active_immediate(&mut self, active: bool) {
+        if active {
+            if let Some(granular) = self.granular.as_mut() {
+                let n_sources = granular.sources.len();
+                let config = granular.config;
+                let seed = self.rng_state ^ lcg_next(&mut self.rng_state) as u64;
+                assign_channels(granular, &config, n_sources, seed);
+            }
+        }
         let g = if active { 1.0 } else { 0.0 };
         self.granular_gain = g;
         self.granular_target_gain = g;
@@ -524,8 +545,21 @@ impl Engine {
         }
     }
 
+    fn refresh_granular_channel_assignments(&mut self) {
+        if let Some(granular) = self.granular.as_mut() {
+            let n_sources = granular.sources.len();
+            let config = granular.config;
+            let seed = lcg_next(&mut self.rng_state) as u64;
+            assign_channels(granular, &config, n_sources, seed);
+        }
+    }
+
     pub fn set_scale(&mut self, mode: ScaleMode, spread_percent: f32) {
         self.scale_mode = mode;
+        if let Some(granular) = self.granular.as_mut() {
+            granular.config.scale_mode = mode;
+        }
+        self.refresh_granular_channel_assignments();
         let n = self.oscillators.len();
         let center = (n.saturating_sub(1) as f32) / 2.0;
 
@@ -922,6 +956,7 @@ impl Engine {
                 granular.active_grains.swap_remove(idx);
                 continue;
             }
+            debug_assert!(grain.source_index < granular.sources.len());
             let source = &granular.sources[grain.source_index];
             let source_len = source.samples.len() as f32;
             // Loop the grain window: when we've traversed grain_size_ms of source audio,
@@ -929,7 +964,7 @@ impl Engine {
             if grain.window_source_samples >= 2
                 && grain.sample_offset >= grain.window_source_samples as f32
             {
-                grain.sample_offset -= grain.window_source_samples as f32;
+                grain.sample_offset = grain.sample_offset.rem_euclid(grain.window_source_samples as f32);
                 // Jump to a fresh random position within [position, position + position_jitter]
                 // so every window loop plays a different part of the source.
                 let rnd = lcg_next(&mut grain.rng_state) as f32 / u32::MAX as f32;
@@ -945,13 +980,19 @@ impl Engine {
                 granular.active_grains.swap_remove(idx);
                 continue;
             }
-            let envelope = grain_envelope(grain);
-            let sample = sample_linear(&source.samples, pos) * envelope;
+            let life_env = grain_envelope(grain);
+            // Apply Hann window within the window loop to eliminate clicks at wrap boundaries.
+            // window_phase goes 0.0 → 1.0 across grain.window_source_samples.
+            // At both boundaries (phase 0.0 and 1.0), Hann envelope = 0.0, making wraps inaudible.
+            debug_assert!(grain.window_source_samples >= 1, "window_source_samples must be >= 1 to avoid NaN");
+            let window_phase = (grain.sample_offset / grain.window_source_samples as f32).clamp(0.0, 1.0);
+            let window_env = hann_window(window_phase);
+            let sample = sample_linear(&source.samples, pos) * life_env * window_env;
             let source_gain = granular.source_voices[grain.source_index].gain;
             let s = sample * source_gain;
             left += s * grain.voice.pan_l;
             right += s * grain.voice.pan_r;
-            grain.sample_offset += grain.playback_ratio;
+            grain.sample_offset += grain.playback_ratio * grain.detune_ratio;
             grain.age_samples += 1;
             idx += 1;
         }
@@ -962,7 +1003,7 @@ impl Engine {
             voice.ramp_gain(fade_rate);
         }
 
-        let grain_norm = granular.config.max_overlapping_grains.max(1) as f32;
+        let grain_norm = granular.active_grains.len().max(1) as f32;
         (
             (left / grain_norm).clamp(-1.0, 1.0),
             (right / grain_norm).clamp(-1.0, 1.0),
@@ -1001,10 +1042,147 @@ fn key_to_semitone(key: &str) -> Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::granular::GranularChannel;
     use std::{fs, path::Path};
-    use approx::assert_relative_eq;
+    use approx::{assert_relative_eq, relative_eq};
     use std::collections::HashSet;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_granular_sources(count: usize) -> Vec<GranularSource> {
+        (0..count)
+            .map(|i| GranularSource {
+                name: format!("source_{i}"),
+                sample_rate: 48_000,
+                samples: vec![0.0, 0.25, -0.25, 0.5, -0.5, 0.25, -0.25, 0.0],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn unit_should_produce_unique_detune_ratios_when_scale_has_multiple_notes() {
+        let mut config = GranularConfig::default();
+        config.scale_mode = ScaleMode::WholeTone;
+        config.granular_channels = 4;
+        config.granular_pitch_cents = 1200.0;
+        let mut state = GranularState::new(test_granular_sources(3), config);
+
+        super::granular::assign_channels(&mut state, &config, 3, 0x1234);
+
+        assert_eq!(state.channels.len(), 4);
+        let first = state.channels[0].detune_ratio;
+        let any_diff = state
+            .channels
+            .iter()
+            .skip(1)
+            .any(|ch| !relative_eq!(ch.detune_ratio, first, epsilon = 1e-6));
+        assert!(any_diff);
+    }
+
+    #[test]
+    fn unit_should_use_valid_source_indices_when_n_sources_is_given() {
+        let mut config = GranularConfig::default();
+        config.scale_mode = ScaleMode::WholeTone;
+        config.granular_channels = 6;
+        config.granular_pitch_cents = 1200.0;
+        let mut state = GranularState::new(test_granular_sources(3), config);
+
+        super::granular::assign_channels(&mut state, &config, 3, 0xbeef);
+
+        assert!(state.channels.iter().all(|ch| ch.source_index < 3));
+    }
+
+    #[test]
+    fn assign_channels_should_produce_spread_of_one_octave_when_pitch_cents_is_1200() {
+        let mut config = GranularConfig::default();
+        config.scale_mode = ScaleMode::WholeTone;
+        config.granular_channels = 64;
+        config.granular_pitch_cents = 1200.0;
+        let mut state = GranularState::new(test_granular_sources(2), config);
+
+        super::granular::assign_channels(&mut state, &config, 2, 0xdeadbeef);
+
+        let min_ratio = state
+            .channels
+            .iter()
+            .map(|ch| ch.detune_ratio)
+            .fold(f32::INFINITY, f32::min);
+        let max_ratio = state
+            .channels
+            .iter()
+            .map(|ch| ch.detune_ratio)
+            .fold(f32::NEG_INFINITY, f32::max);
+
+        assert!(max_ratio / min_ratio >= 1.9);
+    }
+
+    #[test]
+    fn assign_channels_should_produce_unity_ratios_when_pitch_cents_is_zero() {
+        let mut config = GranularConfig::default();
+        config.scale_mode = ScaleMode::WholeTone;
+        config.granular_channels = 4;
+        config.granular_pitch_cents = 0.0;
+        let mut state = GranularState::new(test_granular_sources(2), config);
+
+        super::granular::assign_channels(&mut state, &config, 2, 0xfeed);
+
+        assert!(state
+            .channels
+            .iter()
+            .all(|ch| relative_eq!(ch.detune_ratio, 1.0, epsilon = 1e-6)));
+    }
+
+    #[test]
+    fn spawn_grain_should_use_first_channel_source_when_channels_assigned() {
+        let mut config = GranularConfig::default();
+        config.max_overlapping_grains = 8;
+        config.granular_channels = 2;
+        config.granular_pitch_cents = 1200.0;
+
+        let mut engine = Engine::new_granular(48_000, 2, test_granular_sources(3), config).unwrap();
+        let granular = engine.granular.as_mut().unwrap();
+        granular.channels = vec![
+            GranularChannel {
+                detune_ratio: 1.0,
+                source_index: 2,
+            },
+            GranularChannel {
+                detune_ratio: 1.0,
+                source_index: 0,
+            },
+        ];
+        granular.channel_counter = 0;
+
+        spawn_grain(granular, &mut engine.oscillators, 48_000.0, 220.0, 0.0);
+
+        assert_eq!(granular.active_grains[0].source_index, 2);
+    }
+
+    #[test]
+    fn spawn_grain_should_use_second_channel_source_when_channels_assigned() {
+        let mut config = GranularConfig::default();
+        config.max_overlapping_grains = 8;
+        config.granular_channels = 2;
+        config.granular_pitch_cents = 1200.0;
+
+        let mut engine = Engine::new_granular(48_000, 2, test_granular_sources(3), config).unwrap();
+        let granular = engine.granular.as_mut().unwrap();
+        granular.channels = vec![
+            GranularChannel {
+                detune_ratio: 1.0,
+                source_index: 2,
+            },
+            GranularChannel {
+                detune_ratio: 1.0,
+                source_index: 0,
+            },
+        ];
+        granular.channel_counter = 0;
+
+        spawn_grain(granular, &mut engine.oscillators, 48_000.0, 220.0, 0.0);
+        spawn_grain(granular, &mut engine.oscillators, 48_000.0, 220.0, 0.0);
+
+        assert_eq!(granular.active_grains[1].source_index, 0);
+    }
 
     #[test]
     fn load_wavetables_cycles_builtins_when_min_count_exceeds_unique_builtin_count() {
@@ -2690,5 +2868,256 @@ mod tests {
         let processed_l = dry * input + wet * mono_out;
         let processed_r = dry * input + wet * mono_out;
         assert_eq!(processed_l, processed_r, "symmetric input should yield symmetric output with mono reverb send");
+    }
+
+    #[test]
+    fn render_granular_frame_normalized_should_produce_audible_output_when_pool_is_sparse() {
+        // Test that when only 1-2 grains are active, the normalized output is NOT quiet.
+        // With low density (10 Hz, spawn every 100ms) and 50ms render,
+        // the pool hasn't filled yet, so we have at most 1-2 grains active.
+        //
+        // With FIXED code (divide by active_grains.len() = 1–2):
+        //   peak amplitude ≈ 0.8 / 1.5 ≈ 0.53 → test passes
+        //
+        // With BUGGY code (divide by max_overlapping_grains = 16):
+        //   peak amplitude ≈ 0.8 / 16 ≈ 0.05 → test fails (peak < 0.4)
+        let source = GranularSource {
+            name: "test_sine".to_string(),
+            sample_rate: 48_000,
+            samples: vec![0.8; 48_000], // constant 0.8 amplitude
+        };
+        let mut config = GranularConfig::default();
+        config.grain_density_hz = 10.0; // spawn every 100ms; ~1 grain per render
+        config.grain_size_ms = 100.0;
+        config.grain_note_ms = 3000.0; // 3-second grains persist after spawning
+        config.max_overlapping_grains = 16;
+        config.envelope_attack_ms = 0.0;
+        config.envelope_release_ms = 0.0;
+
+        let mut engine = Engine::new_granular(48_000, 2, vec![source], config).unwrap();
+        engine.set_granular_wavs(1); // enable the granular source
+        engine.set_frequency(220.0);
+
+        // Render multiple frames to accumulate grains within the 1-2 range
+        let mut out = [0i16; 5000 * 2];
+        engine.render_i16_stereo(&mut out);
+
+        // Find peak absolute amplitude
+        let peak = out.iter().map(|s| ((*s as f32) / 32768.0).abs()).fold(0.0, f32::max);
+
+        // With fixed code: divide by 1–2 grains → peak >= 0.3 ✓
+        // With buggy code: divide by 16 → peak ≈ 0.05 ✗
+        assert!(
+            peak >= 0.3,
+            "peak amplitude {} should be >= 0.3 (dividing by 1–2 active grains). \
+             Buggy code divides by fixed max_overlapping_grains=16, giving peak ≈ 0.05",
+            peak
+        );
+    }
+
+    #[test]
+    fn render_granular_frame_normalized_should_be_audible_when_pool_is_filling() {
+        // Test that output amplitude during the fill phase is audible.
+        // With moderate-high density (8 Hz), the pool fills over ~1 second.
+        // During early fill phase, verify granular output is not silenced.
+        //
+        // With FIXED code (divide by active_grains.len()):
+        //   - Early phase (1s): ~8 grains active, all divide individually → output ≈ 0.5
+        //   - early_mean >= 0.15 ✓
+        //
+        // With BUGGY code (divide by max_overlapping_grains = 16):
+        //   - Early phase: left ≈ 4.0 (8 grains * 0.5), divide by 16 → output ≈ 0.25
+        //   - early_mean ≈ 0.08-0.12 (depending on grain timing and spawning)
+        //   - Fails to reach 0.15 threshold with good margin
+        let source = GranularSource {
+            name: "test_sine".to_string(),
+            sample_rate: 48_000,
+            samples: vec![0.5; 48_000], // moderate amplitude
+        };
+        let mut config = GranularConfig::default();
+        config.grain_density_hz = 8.0; // spawn ~8 grains per second
+        config.grain_size_ms = 100.0;
+        config.grain_note_ms = 3000.0; // 3-second grains (fills pool in ~1 second)
+        config.max_overlapping_grains = 16;
+        config.envelope_attack_ms = 0.0;
+        config.envelope_release_ms = 0.0;
+
+        let mut engine = Engine::new_granular(48_000, 2, vec![source], config).unwrap();
+        engine.set_granular_wavs(1); // enable the granular source
+        engine.set_frequency(220.0);
+
+        // Render first second (early phase: pool filling)
+        let frames_per_second = 48_000;
+        let mut out_early = vec![0i16; frames_per_second * 2];
+        engine.render_i16_stereo(&mut out_early);
+
+        // Compute mean absolute value for early phase
+        let mean_abs = |buf: &[i16]| {
+            buf.iter()
+                .map(|s| (*s as f32 / 32768.0).abs())
+                .sum::<f32>()
+                / buf.len() as f32
+        };
+
+        let early_mean = mean_abs(&out_early);
+
+        // Verify early phase is audible (not being silenced by buggy normalization)
+        assert!(
+            early_mean >= 0.15,
+            "early_mean {} should be >= 0.15 (granular should be audible from start). \
+             Buggy code divides by fixed max_overlapping_grains=16, making early phase too quiet",
+            early_mean
+        );
+    }
+
+    #[test]
+    fn render_granular_frame_normalized_should_maintain_stable_amplitude_when_pool_fills() {
+        // Test that output amplitude remains stable as the grain pool fills.
+        // With moderate-high density (8 Hz), the pool fills over ~1 second.
+        // Verify that early and late phase amplitudes remain proportional (ratio < 1.5).
+        //
+        // With FIXED code (divide by active_grains.len()):
+        //   - Early phase (1s): ~8 grains active, all divide individually → output ≈ 0.5
+        //   - Late phase (3s): ~16 grains active, all divide individually → output ≈ 0.5
+        //   - Ratio late_mean / early_mean ≈ 1.0 ✓
+        //
+        // With BUGGY code (divide by max_overlapping_grains = 16):
+        //   - Early phase: left ≈ 4.0 (8 grains * 0.5), divide by 16 → output ≈ 0.25
+        //   - Late phase: left ≈ 8.0 (16 grains * 0.5), divide by 16 → output ≈ 0.5
+        //   - Ratio late_mean / early_mean ≈ 2.0 ✗ (fails the < 1.5 threshold)
+        let source = GranularSource {
+            name: "test_sine".to_string(),
+            sample_rate: 48_000,
+            samples: vec![0.5; 48_000], // moderate amplitude
+        };
+        let mut config = GranularConfig::default();
+        config.grain_density_hz = 8.0; // spawn ~8 grains per second
+        config.grain_size_ms = 100.0;
+        config.grain_note_ms = 3000.0; // 3-second grains (fills pool in ~1 second)
+        config.max_overlapping_grains = 16;
+        config.envelope_attack_ms = 0.0;
+        config.envelope_release_ms = 0.0;
+
+        let mut engine = Engine::new_granular(48_000, 2, vec![source], config).unwrap();
+        engine.set_granular_wavs(1); // enable the granular source
+        engine.set_frequency(220.0);
+
+        // Render 3 seconds of audio split into early and late phases
+        let frames_per_second = 48_000;
+        let mut out_early = vec![0i16; frames_per_second * 2];
+        let mut out_late = vec![0i16; frames_per_second * 2];
+
+        // Render first second (early phase: pool filling)
+        engine.render_i16_stereo(&mut out_early);
+
+        // Render second second (pool continues filling)
+        let mut out_mid = vec![0i16; frames_per_second * 2];
+        engine.render_i16_stereo(&mut out_mid);
+
+        // Render third second (late phase: pool full, expiring grains replaced)
+        engine.render_i16_stereo(&mut out_late);
+
+        // Compute mean absolute value for early and late phases
+        let mean_abs = |buf: &[i16]| {
+            buf.iter()
+                .map(|s| (*s as f32 / 32768.0).abs())
+                .sum::<f32>()
+                / buf.len() as f32
+        };
+
+        let early_mean = mean_abs(&out_early);
+        let late_mean = mean_abs(&out_late);
+
+        // Verify amplitude ratio is close to 1.0 (stable amplitude)
+        assert!(early_mean > 0.0, "early phase produced silence — grain spawning may be broken");
+        let ratio = late_mean / early_mean;
+        assert!(
+            ratio < 1.5,
+            "late_mean {} / early_mean {} = {:.2}; should be < 1.5 (stable amplitude). \
+             Buggy code divides by fixed max_overlapping_grains=16, so early_mean ≈ 0.25 and late_mean ≈ 0.5, giving ratio ≈ 2.0",
+            late_mean, early_mean, ratio
+        );
+    }
+
+    #[test]
+    fn hann_window_should_be_zero_at_start_boundary() {
+        let window_env = hann_window(0.0);
+        assert_relative_eq!(window_env, 0.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn hann_window_should_be_zero_at_end_boundary() {
+        let window_env = hann_window(1.0);
+        assert_relative_eq!(window_env, 0.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn hann_window_should_be_one_at_window_midpoint() {
+        // Test the Hann window formula at midpoint: phase = 0.5
+        // At phase = 0.5: 0.5 * (1.0 - cos(PI)) = 0.5 * (1.0 - (-1.0)) = 1.0
+        let phase_mid = 0.5f32;
+        let window_mid = hann_window(phase_mid);
+        assert_relative_eq!(window_mid, 1.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn render_granular_frame_normalized_should_not_produce_large_sample_jumps_when_window_wraps() {
+        // Integration test: verify that window wraps do not produce audible clicks.
+        // Clicks manifest as large discontinuities (steps > 0.2 between consecutive samples).
+        // Before the fix: window wrap causes jump from waveform value X to completely different Y.
+        // After the fix: both sides are at Hann envelope ≈ 0.0, making the step inaudible.
+        //
+        // Use a sine wave source (smooth, natural waveform) to isolate window wrap effects.
+        // This eliminates the square wave's inherent large steps (±1.6 per sample).
+        let source = GranularSource {
+            name: "sine_test".to_string(),
+            sample_rate: 48_000,
+            samples: (0..48_000)
+                .map(|i| {
+                    let phase = (i as f32 / 48_000.0) * std::f32::consts::TAU;
+                    phase.sin() * 0.8
+                })
+                .collect(),
+        };
+
+        let mut config = GranularConfig::default();
+        config.grain_size_ms = 50.0; // 2400 samples per window at 48kHz
+        config.grain_note_ms = 1000.0; // 1000ms = ~20 window wraps
+        config.grain_density_hz = 2.0; // 2 grains per second
+        config.max_overlapping_grains = 16;
+        config.envelope_attack_ms = 0.0; // No attack/release to isolate window wrap effect
+        config.envelope_release_ms = 0.0;
+
+        let mut engine = Engine::new_granular(48_000, 2, vec![source], config).unwrap();
+        engine.set_granular_wavs(1);
+        engine.set_frequency(220.0);
+        engine.set_granular_active_immediate(true);
+
+        // Render ~2 seconds of audio
+        let mut out = vec![0i16; 48_000 * 2];
+        engine.render_i16_stereo(&mut out);
+
+        // Convert to f32 and check consecutive sample differences
+        let samples_f32: Vec<f32> = out.iter().map(|s| *s as f32 / 32768.0).collect();
+
+        // Find maximum absolute step between consecutive samples
+        let mut max_step = 0.0f32;
+        for i in 0..samples_f32.len().saturating_sub(1) {
+            let step = (samples_f32[i + 1] - samples_f32[i]).abs();
+            max_step = max_step.max(step);
+        }
+
+        // Without the Hann window fix, max_step would be 0.3–0.9 (hard click at wrap).
+        // With the fix, max_step should be 0.2 or less (Hann envelope smooths wrap boundaries).
+        assert!(
+            max_step <= 0.2,
+            "max consecutive sample step is {:.4}, should be <= 0.2 (no audible clicks). \
+             Large steps indicate window wrap clicks are present.",
+            max_step
+        );
+
+        // Verify output is not silent (should have audible content)
+        let mean_abs: f32 = samples_f32.iter().map(|s| s.abs()).sum::<f32>() / samples_f32.len() as f32;
+        assert!(mean_abs > 0.01, "output should not be silent; mean_abs = {mean_abs:.6}");
     }
 }

@@ -2,11 +2,18 @@ use crate::types::{GranularConfig, GranularSource};
 use crate::{lcg_next, Oscillator, Voice, C2_FREQUENCY_HZ};
 
 #[derive(Clone, Debug)]
+pub(crate) struct GranularChannel {
+    pub(crate) detune_ratio: f32,
+    pub(crate) source_index: usize,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct ActiveGrain {
     pub(crate) source_index: usize,
     pub(crate) start_sample: f32,
     pub(crate) sample_offset: f32,
     pub(crate) playback_ratio: f32,
+    pub(crate) detune_ratio: f32,
     pub(crate) sample_length: usize,
     pub(crate) window_source_samples: usize,
     pub(crate) age_samples: usize,
@@ -26,6 +33,8 @@ pub(crate) struct GranularState {
     pub(crate) source_offset: usize,
     pub(crate) configured_wavs: usize,
     pub(crate) round_robin_counter: usize,
+    pub(crate) channels: Vec<GranularChannel>,
+    pub(crate) channel_counter: usize,
     pub(crate) rng_state: u64,
     pub(crate) initialized: bool,
 }
@@ -64,9 +73,65 @@ impl GranularState {
             source_offset: 0,
             configured_wavs,
             round_robin_counter: 0,
+            channels: Vec::new(),
+            channel_counter: 0,
             rng_state,
             initialized: false,
         }
+    }
+}
+
+pub(crate) fn assign_channels(
+    state: &mut GranularState,
+    config: &GranularConfig,
+    n_sources: usize,
+    rng_seed: u64,
+) {
+    state.channels.clear();
+    state.channel_counter = 0;
+
+    if n_sources == 0 || config.granular_channels == 0 {
+        return;
+    }
+
+    state.channels.reserve(config.granular_channels);
+    let mut rng_state = rng_seed;
+    let scale_notes = config.scale_mode.semitones();
+    let half_spread_semitones = (config.granular_pitch_cents.max(0.0) / 200.0).max(0.0);
+
+    let (min_note, max_note) = if scale_notes.is_empty() {
+        (0_i32, 0_i32)
+    } else {
+        let mut min_note = i32::MAX;
+        let mut max_note = i32::MIN;
+        for &note in scale_notes {
+            min_note = min_note.min(note);
+            max_note = max_note.max(note);
+        }
+        (min_note, max_note)
+    };
+
+    for _ in 0..config.granular_channels {
+        let semitone_offset = if scale_notes.is_empty() {
+            0.0
+        } else {
+            let note_index = lcg_next(&mut rng_state) as usize % scale_notes.len();
+            let note = scale_notes[note_index] as f32;
+            let spread = (max_note - min_note) as f32;
+            if spread <= 0.0 {
+                0.0
+            } else {
+                let normalized = (note - min_note as f32) / spread;
+                (normalized * 2.0 - 1.0) * half_spread_semitones
+            }
+        };
+
+        let detune_ratio = 2.0f32.powf(semitone_offset / 12.0);
+        let source_index = lcg_next(&mut rng_state) as usize % n_sources;
+        state.channels.push(GranularChannel {
+            detune_ratio,
+            source_index,
+        });
     }
 }
 
@@ -87,10 +152,21 @@ pub(crate) fn spawn_grain(
         return;
     }
 
-    let osc_idx = granular.round_robin_counter % oscillators.len();
-    let lane = granular.round_robin_counter % granular.configured_wavs;
+    let round_robin_counter = granular.round_robin_counter;
+    let osc_idx = round_robin_counter % oscillators.len();
     granular.round_robin_counter = granular.round_robin_counter.wrapping_add(1);
-    let source_index = (granular.source_offset + lane) % granular.sources.len();
+    let (source_index, detune_ratio) = if granular.channels.is_empty() {
+        let lane = round_robin_counter % granular.configured_wavs;
+        ((granular.source_offset + lane) % granular.sources.len(), 1.0)
+    } else {
+        let channel_idx = granular.channel_counter % granular.channels.len();
+        granular.channel_counter = granular.channel_counter.wrapping_add(1);
+        let channel = &granular.channels[channel_idx];
+        let active = granular.configured_wavs.max(1).min(granular.sources.len());
+        let source_index = (granular.source_offset + channel.source_index % active) % granular.sources.len();
+        (source_index, channel.detune_ratio)
+    };
+    debug_assert!(source_index < granular.sources.len());
     let source = &granular.sources[source_index];
     let source_len = source.samples.len();
     if source_len < 2 {
@@ -151,6 +227,7 @@ pub(crate) fn spawn_grain(
         start_sample,
         sample_offset: 0.0,
         playback_ratio,
+        detune_ratio,
         sample_length: note_len_samples,
         window_source_samples,
         age_samples: 0,
@@ -189,7 +266,7 @@ pub(crate) fn sample_linear(samples: &[f32], pos: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn grain_detune_clamped_within_bounds() {
+    fn detune_ratio_should_fold_to_lower_boundary_when_cents_is_exactly_500() {
         let apply = |cents: f32| -> f32 {
             let folded = (cents + 700.0).rem_euclid(1200.0) - 700.0;
             2.0f32.powf(folded / 1200.0)
@@ -197,6 +274,15 @@ mod tests {
 
         // +500 cents wraps to -700 (the fold boundary, half-open at +500)
         assert!((apply(500.0) - 2.0f32.powf(-700.0/1200.0)).abs() < 1e-4, "+5st should fold to -7st boundary");
+    }
+
+    #[test]
+    fn detune_ratio_should_remain_positive_when_cents_is_just_below_500() {
+        let apply = |cents: f32| -> f32 {
+            let folded = (cents + 700.0).rem_euclid(1200.0) - 700.0;
+            2.0f32.powf(folded / 1200.0)
+        };
+
         // +499 cents stays near +499 (just inside boundary)
         assert!(apply(499.0) > 2.0f32.powf(498.0/1200.0), "+499 cents should be positive detune");
     }

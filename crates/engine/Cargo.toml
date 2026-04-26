@@ -8,5 +8,8 @@ license.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 
+[[example]]
+name = "render_granular"
+
 [dev-dependencies]
 approx = "0.5"
