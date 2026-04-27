@@ -1,6 +1,6 @@
+use crate::menu::Button;
 use anyhow::{Context, Result};
 use rppal::gpio::{Gpio, InputPin};
-use crate::menu::Button;
 
 pub struct ButtonConfig {
     pub pins: Vec<(u8, Button)>,

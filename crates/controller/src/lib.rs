@@ -77,7 +77,11 @@ impl SynthController {
     /// Change the played note (or MIDI pitch). Applies frequency glide if
     /// `note_transition_ms` > 0.
     pub fn set_note_hz(&mut self, frequency_hz: f32) {
-        if self.sender.send(AudioCommand::SetFrequencyHz(frequency_hz)).is_err() {
+        if self
+            .sender
+            .send(AudioCommand::SetFrequencyHz(frequency_hz))
+            .is_err()
+        {
             eprintln!("[controller] audio channel disconnected");
         }
         // Record transition start time for glide progress tracking
@@ -91,7 +95,11 @@ impl SynthController {
     /// Set the glide duration for all note/scale/cents transitions.
     pub fn set_note_transition_ms(&mut self, ms: f32) {
         self.note_transition_ms = ms.max(0.0);
-        if self.sender.send(AudioCommand::SetNoteTransitionMs(self.note_transition_ms)).is_err() {
+        if self
+            .sender
+            .send(AudioCommand::SetNoteTransitionMs(self.note_transition_ms))
+            .is_err()
+        {
             eprintln!("[controller] audio channel disconnected");
         }
         // Only set_note_hz() starts a glide. Changing duration alone does not start a glide.
@@ -100,14 +108,22 @@ impl SynthController {
 
     /// Set the wavetable bank crossfade duration in seconds.
     pub fn set_transition_secs(&self, secs: f32) {
-        if self.sender.send(AudioCommand::SetTransitionSecs(secs)).is_err() {
+        if self
+            .sender
+            .send(AudioCommand::SetTransitionSecs(secs))
+            .is_err()
+        {
             eprintln!("[controller] audio channel disconnected");
         }
     }
 
     /// Enable or disable all oscillators immediately.
     pub fn set_oscillators_active(&self, active: bool) {
-        if self.sender.send(AudioCommand::SetOscillatorsActive(active)).is_err() {
+        if self
+            .sender
+            .send(AudioCommand::SetOscillatorsActive(active))
+            .is_err()
+        {
             eprintln!("[controller] audio channel disconnected");
         }
     }
@@ -121,7 +137,10 @@ impl SynthController {
 
     /// Stage a scale change. Dispatched after debounce delay.
     pub fn stage_scale(&mut self, mode: ScaleMode, spread_percent: f32) {
-        self.scale_debounce.stage(ScaleParams { mode, spread_percent });
+        self.scale_debounce.stage(ScaleParams {
+            mode,
+            spread_percent,
+        });
     }
 
     /// Stage a wavetable bank change. Dispatched after debounce delay.
@@ -135,30 +154,46 @@ impl SynthController {
     /// Call this on every UI poll iteration.
     pub fn poll(&mut self) {
         if let Some(cents) = self.cents_debounce.flush() {
-            if self.sender.send(AudioCommand::SetFineTuneCents(cents)).is_err() {
+            if self
+                .sender
+                .send(AudioCommand::SetFineTuneCents(cents))
+                .is_err()
+            {
                 eprintln!("[controller] audio channel disconnected");
             }
             // Only resend scale when a real scale mode is active
             if self.current_scale_mode != ScaleMode::None {
-                if self.sender.send(AudioCommand::SetScale {
-                    mode: self.current_scale_mode,
-                    spread_percent: cents,
-                }).is_err() {
+                if self
+                    .sender
+                    .send(AudioCommand::SetScale {
+                        mode: self.current_scale_mode,
+                        spread_percent: cents,
+                    })
+                    .is_err()
+                {
                     eprintln!("[controller] audio channel disconnected");
                 }
             }
         }
         if let Some(params) = self.scale_debounce.flush() {
             self.current_scale_mode = params.mode;
-            if self.sender.send(AudioCommand::SetScale {
-                mode: params.mode,
-                spread_percent: params.spread_percent,
-            }).is_err() {
+            if self
+                .sender
+                .send(AudioCommand::SetScale {
+                    mode: params.mode,
+                    spread_percent: params.spread_percent,
+                })
+                .is_err()
+            {
                 eprintln!("[controller] audio channel disconnected");
             }
         }
         if let Some(bank) = self.bank_debounce.flush() {
-            if self.sender.send(AudioCommand::SetWavetableBank(bank)).is_err() {
+            if self
+                .sender
+                .send(AudioCommand::SetWavetableBank(bank))
+                .is_err()
+            {
                 eprintln!("[controller] audio channel disconnected");
             }
         }
@@ -190,7 +225,9 @@ mod tests {
     use super::*;
     use crossbeam_channel;
 
-    fn make_controller(debounce_ms: u64) -> (SynthController, crossbeam_channel::Receiver<AudioCommand>) {
+    fn make_controller(
+        debounce_ms: u64,
+    ) -> (SynthController, crossbeam_channel::Receiver<AudioCommand>) {
         let (tx, rx) = crossbeam_channel::bounded(64);
         (SynthController::new(tx, debounce_ms), rx)
     }
@@ -227,7 +264,10 @@ mod tests {
         let (mut ctrl, rx) = make_controller(1000); // 1 second delay
         ctrl.stage_fine_tune_cents(25.0);
         ctrl.poll(); // too early
-        assert!(rx.try_recv().is_err(), "should not flush before debounce delay");
+        assert!(
+            rx.try_recv().is_err(),
+            "should not flush before debounce delay"
+        );
     }
 
     #[test]
@@ -290,7 +330,10 @@ mod tests {
             "only the latest staged value should be dispatched"
         );
         // With current_scale_mode == ScaleMode::None (initial state), SetScale is not sent
-        assert!(rx.try_recv().is_err(), "only one command should be sent when scale mode is None");
+        assert!(
+            rx.try_recv().is_err(),
+            "only one command should be sent when scale mode is None"
+        );
     }
 
     #[test]
@@ -306,7 +349,9 @@ mod tests {
         ctrl.poll();
 
         let cmd1 = rx.try_recv().expect("expected SetFineTuneCents");
-        let cmd2 = rx.try_recv().expect("expected SetScale with updated spread");
+        let cmd2 = rx
+            .try_recv()
+            .expect("expected SetScale with updated spread");
         assert!(matches!(cmd1, AudioCommand::SetFineTuneCents(c) if (c - 50.0).abs() < 0.01));
         assert!(
             matches!(cmd2, AudioCommand::SetScale { mode: ScaleMode::Major, spread_percent } if (spread_percent - 50.0).abs() < 0.01),
@@ -329,7 +374,10 @@ mod tests {
         ctrl.set_note_hz(440.0);
         let p = ctrl.transition_progress();
         assert!(p.is_some(), "expected Some progress");
-        assert!(p.unwrap() < 0.1, "progress should be near 0 immediately after note set");
+        assert!(
+            p.unwrap() < 0.1,
+            "progress should be near 0 immediately after note set"
+        );
     }
 
     #[test]
@@ -338,6 +386,9 @@ mod tests {
         ctrl.set_note_transition_ms(1.0); // 1ms — will complete almost immediately
         ctrl.set_note_hz(440.0);
         std::thread::sleep(std::time::Duration::from_millis(10));
-        assert!(ctrl.transition_progress().is_none(), "should be None after glide completes");
+        assert!(
+            ctrl.transition_progress().is_none(),
+            "should be None after glide completes"
+        );
     }
 }

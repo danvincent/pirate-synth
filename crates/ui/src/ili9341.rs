@@ -2,8 +2,11 @@ use anyhow::{Context, Result};
 use rppal::gpio::OutputPin;
 use rppal::spi::{Mode, Spi};
 
-use crate::display::{SPI_CLOCK_HZ, SPI_FRAMEBUFFER_CHUNK_SIZE};
+use crate::display::{
+    build_idle_framebuffer, build_menu_framebuffer, SPI_CLOCK_HZ, SPI_FRAMEBUFFER_CHUNK_SIZE,
+};
 use crate::framebuffer::Framebuffer;
+use crate::menu::MenuState;
 use crate::parse_spi_device;
 
 pub struct Ili9341Display {
@@ -71,15 +74,15 @@ impl Ili9341Display {
             (
                 0xE0,
                 vec![
-                    0x0F, 0x31, 0x2B, 0x0C, 0x0E, 0x08, 0x4E, 0xF1, 0x37, 0x07, 0x10, 0x03,
-                    0x0E, 0x09, 0x00,
+                    0x0F, 0x31, 0x2B, 0x0C, 0x0E, 0x08, 0x4E, 0xF1, 0x37, 0x07, 0x10, 0x03, 0x0E,
+                    0x09, 0x00,
                 ],
             ),
             (
                 0xE1,
                 vec![
-                    0x00, 0x0E, 0x14, 0x03, 0x11, 0x07, 0x31, 0xC1, 0x48, 0x08, 0x0F, 0x0C,
-                    0x31, 0x36, 0x0F,
+                    0x00, 0x0E, 0x14, 0x03, 0x11, 0x07, 0x31, 0xC1, 0x48, 0x08, 0x0F, 0x0C, 0x31,
+                    0x36, 0x0F,
                 ],
             ),
             (0x11, vec![]),
@@ -126,6 +129,43 @@ impl Ili9341Display {
         Ok(())
     }
 
+    pub fn draw_menu(&mut self, state: &MenuState) -> Result<()> {
+        let fb = build_menu_framebuffer(state, self.width, self.height);
+        self.write_full_framebuffer(&fb)
+    }
+
+    pub fn draw_idle_screen(&mut self, state: &MenuState, hostname: &str) -> Result<()> {
+        let fb = build_idle_framebuffer(state, hostname, self.width, self.height);
+        self.write_full_framebuffer(&fb)
+    }
+
+    pub fn draw_powering_down_screen(&mut self) -> Result<()> {
+        let mut fb = Framebuffer::new(self.width, self.height);
+        fb.clear(0x0000);
+        let fb_width = fb.width() as i32;
+
+        let line1 = "Powering";
+        let line1_w = line1.chars().count() as i32 * 16;
+        let line1_x = (fb_width - line1_w) / 2;
+        fb.draw_text_2x(line1_x, 96, line1, 0xF800, 0x0000);
+
+        let line2 = "down";
+        let line2_w = line2.chars().count() as i32 * 16;
+        let line2_x = (fb_width - line2_w) / 2;
+        fb.draw_text_2x(line2_x, 122, line2, 0xF800, 0x0000);
+
+        self.write_full_framebuffer(&fb)
+    }
+
+    pub fn clear_and_backlight_off(&mut self) -> Result<()> {
+        let fb = Framebuffer::new(self.width, self.height);
+        self.write_full_framebuffer(&fb)?;
+        if let Some(backlight) = &mut self.backlight {
+            backlight.set_low();
+        }
+        Ok(())
+    }
+
     fn send_command(&mut self, cmd: u8) -> Result<()> {
         self.dc.set_low();
         self.spi
@@ -167,8 +207,7 @@ mod tests {
         assert_eq!(
             cmds,
             vec![
-                0x01, 0xC0, 0xC1, 0xC5, 0xC7, 0x36, 0x3A, 0xB1, 0xB6, 0x26, 0xE0, 0xE1, 0x11,
-                0x29,
+                0x01, 0xC0, 0xC1, 0xC5, 0xC7, 0x36, 0x3A, 0xB1, 0xB6, 0x26, 0xE0, 0xE1, 0x11, 0x29,
             ]
         );
     }

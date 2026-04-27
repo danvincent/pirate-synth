@@ -175,8 +175,14 @@ impl MenuState {
 
     pub fn lines(&self) -> Vec<String> {
         vec![
-            format!("Wavetable: {}", if self.oscillators_active { "On" } else { "Off" }),
-            format!("Granular: {}", if self.granular_active { "On" } else { "Off" }),
+            format!(
+                "Wavetable: {}",
+                if self.oscillators_active { "On" } else { "Off" }
+            ),
+            format!(
+                "Granular: {}",
+                if self.granular_active { "On" } else { "Off" }
+            ),
             format!("Key: {}", self.key_name()),
             format!("Scale: {}", SCALE_NAMES[self.scale_index]),
             format!("Octave: {}", self.octave),
@@ -188,10 +194,13 @@ impl MenuState {
             format!("WT Oscs: {}", self.osc_count),
             format!("GR Voices: {}", self.gr_voices),
             format!("Video: {}", self.video_status.as_str()),
-            format!("Glide: {}", match self.glide_progress {
-                None => "---".to_string(),
-                Some(p) => format!("{}%", (p * 100.0) as u32),
-            }),
+            format!(
+                "Glide: {}",
+                match self.glide_progress {
+                    None => "---".to_string(),
+                    Some(p) => format!("{}%", (p * 100.0) as u32),
+                }
+            ),
         ]
     }
 }
@@ -228,15 +237,18 @@ mod tests {
             menu.apply_button(Button::Down);
         }
         assert_eq!(menu.selected_item, 11);
-        assert!(menu.scroll_offset > 0, "scroll_offset should shift when selected item exceeds visible window");
+        assert!(
+            menu.scroll_offset > 0,
+            "scroll_offset should shift when selected item exceeds visible window"
+        );
     }
 
     #[test]
     fn menu_default_values_match_spec() {
         let menu = MenuState::new(0.0, 8, 8);
-        assert_eq!(menu.key_index, 9);           // A
+        assert_eq!(menu.key_index, 9); // A
         assert_eq!(menu.octave, 1);
-        assert_eq!(menu.scale_index, 7);         // HIRAJOSHI
+        assert_eq!(menu.scale_index, 7); // HIRAJOSHI
         assert_eq!(menu.stereo_spread, 100);
         assert_eq!(menu.wt_volume, 50);
         assert_eq!(menu.gr_volume, 50);
@@ -249,19 +261,58 @@ mod tests {
     fn menu_lines_correct_labels() {
         let menu = MenuState::new(0.0, 8, 8);
         let lines = menu.lines();
-        assert!(lines[0].starts_with("Wavetable:"), "line 0 should start with Wavetable:");
-        assert!(lines[1].starts_with("Granular:"), "line 1 should start with Granular:");
-        assert!(lines[2].starts_with("Key:"), "line 2 should start with Key:");
-        assert!(lines[3].starts_with("Scale:"), "line 3 should start with Scale:");
-        assert!(lines[4].starts_with("Octave:"), "line 4 should start with Octave:");
-        assert!(lines[5].starts_with("Stereo:"), "line 5 should start with Stereo:");
-        assert!(lines[6].starts_with("WT Bank:"), "line 6 should start with WT Bank:");
-        assert!(lines[7].starts_with("WT Vol:"), "line 7 should start with WT Vol:");
-        assert!(lines[8].starts_with("GR Vol:"), "line 8 should start with GR Vol:");
-        assert!(lines[9].starts_with("Cents:"), "line 9 should start with Cents:");
-        assert!(lines[10].starts_with("WT Oscs:"), "line 10 should start with WT Oscs:");
-        assert!(lines[11].starts_with("GR Voices:"), "line 11 should start with GR Voices:");
-        assert!(lines[12].starts_with("Video:"), "line 12 should start with Video:");
+        assert!(
+            lines[0].starts_with("Wavetable:"),
+            "line 0 should start with Wavetable:"
+        );
+        assert!(
+            lines[1].starts_with("Granular:"),
+            "line 1 should start with Granular:"
+        );
+        assert!(
+            lines[2].starts_with("Key:"),
+            "line 2 should start with Key:"
+        );
+        assert!(
+            lines[3].starts_with("Scale:"),
+            "line 3 should start with Scale:"
+        );
+        assert!(
+            lines[4].starts_with("Octave:"),
+            "line 4 should start with Octave:"
+        );
+        assert!(
+            lines[5].starts_with("Stereo:"),
+            "line 5 should start with Stereo:"
+        );
+        assert!(
+            lines[6].starts_with("WT Bank:"),
+            "line 6 should start with WT Bank:"
+        );
+        assert!(
+            lines[7].starts_with("WT Vol:"),
+            "line 7 should start with WT Vol:"
+        );
+        assert!(
+            lines[8].starts_with("GR Vol:"),
+            "line 8 should start with GR Vol:"
+        );
+        assert!(
+            lines[9].starts_with("Cents:"),
+            "line 9 should start with Cents:"
+        );
+        assert!(
+            lines[10].starts_with("WT Oscs:"),
+            "line 10 should start with WT Oscs:"
+        );
+        assert!(
+            lines[11].starts_with("GR Voices:"),
+            "line 11 should start with GR Voices:"
+        );
+        assert!(
+            lines[12].starts_with("Video:"),
+            "line 12 should start with Video:"
+        );
     }
 
     #[test]

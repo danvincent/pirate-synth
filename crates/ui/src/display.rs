@@ -1,10 +1,10 @@
+use crate::framebuffer::Framebuffer;
+use crate::menu::{MenuState, SCALE_NAMES};
+use crate::parse_spi_device;
 use anyhow::{Context, Result};
 use rppal::gpio::OutputPin;
 use rppal::spi::{Mode, Spi};
 use std::path::Path;
-use crate::framebuffer::Framebuffer;
-use crate::menu::{MenuState, SCALE_NAMES};
-use crate::parse_spi_device;
 
 // Keep SPI transfers small to avoid EMSGSIZE from Linux spidev on constrained targets.
 pub(crate) const SPI_FRAMEBUFFER_CHUNK_SIZE: usize = 4096;
@@ -158,9 +158,25 @@ pub(crate) fn build_menu_framebuffer(state: &MenuState, width: u16, height: u16)
     fb.clear(0x0000);
     let fb_width = fb.width() as i32;
 
-    draw_menu_status_panel(&mut fb, "WT", state.oscillators_active, state.wt_volume, 0, 0x07E0, 0x2945);
+    draw_menu_status_panel(
+        &mut fb,
+        "WT",
+        state.oscillators_active,
+        state.wt_volume,
+        0,
+        0x07E0,
+        0x2945,
+    );
     fb.fill_rect(116, 0, 8, 13, 0x0000);
-    draw_menu_status_panel(&mut fb, "GR", state.granular_active, state.gr_volume, 124, 0x001F, 0x2945);
+    draw_menu_status_panel(
+        &mut fb,
+        "GR",
+        state.granular_active,
+        state.gr_volume,
+        124,
+        0x001F,
+        0x2945,
+    );
 
     let key_octave = format!("{}{}", state.key_name(), state.octave);
     let scale_name = SCALE_NAMES[state.scale_index];
@@ -170,7 +186,12 @@ pub(crate) fn build_menu_framebuffer(state: &MenuState, width: u16, height: u16)
     fb.fill_rect(0, 26, fb_width, 2, 0x4208);
 
     let lines = state.lines();
-    for (visual_row, line) in lines.iter().skip(scroll_offset).take(VISIBLE_ROWS).enumerate() {
+    for (visual_row, line) in lines
+        .iter()
+        .skip(scroll_offset)
+        .take(VISIBLE_ROWS)
+        .enumerate()
+    {
         let abs_index = scroll_offset + visual_row;
         let y = 30 + (visual_row as i32 * 18);
         let selected = abs_index == selected_item;
@@ -231,10 +252,30 @@ pub(crate) fn build_idle_framebuffer(
     let scale_w = scale.chars().count() as i32 * 16;
     fb.draw_text_2x((fb_width - scale_w) / 2, 58, scale, 0xAD55, 0x0000);
 
-    draw_idle_volume_bar(&mut fb, state.oscillators_active, state.wt_volume, 35, 0x07E0, 0x2945, "WT");
-    draw_idle_volume_bar(&mut fb, state.granular_active, state.gr_volume, 155, 0x001F, 0x2945, "GR");
+    draw_idle_volume_bar(
+        &mut fb,
+        state.oscillators_active,
+        state.wt_volume,
+        35,
+        0x07E0,
+        0x2945,
+        "WT",
+    );
+    draw_idle_volume_bar(
+        &mut fb,
+        state.granular_active,
+        state.gr_volume,
+        155,
+        0x001F,
+        0x2945,
+        "GR",
+    );
 
-    let wave_color: u16 = if state.oscillators_active || state.granular_active { 0x4208 } else { 0x2104 };
+    let wave_color: u16 = if state.oscillators_active || state.granular_active {
+        0x4208
+    } else {
+        0x2104
+    };
     draw_idle_sine_wave(&mut fb, 195, wave_color);
 
     let hostname_x = ((fb_width - hostname.chars().count() as i32 * 8) / 2).max(0);

@@ -45,7 +45,7 @@ impl GranularState {
         // Seed rng from source sample counts so each load has a unique phase.
         let rng_state = sources.iter().fold(0xdeadbeef_cafebabe_u64, |acc, s| {
             acc.wrapping_add(s.samples.len() as u64)
-               .wrapping_mul(6364136223846793005_u64)
+                .wrapping_mul(6364136223846793005_u64)
         });
 
         // Initialize source_voices with stereo panning (-1 = full left, 0 = center, 1 = full right)
@@ -157,13 +157,17 @@ pub(crate) fn spawn_grain(
     granular.round_robin_counter = granular.round_robin_counter.wrapping_add(1);
     let (source_index, detune_ratio) = if granular.channels.is_empty() {
         let lane = round_robin_counter % granular.configured_wavs;
-        ((granular.source_offset + lane) % granular.sources.len(), 1.0)
+        (
+            (granular.source_offset + lane) % granular.sources.len(),
+            1.0,
+        )
     } else {
         let channel_idx = granular.channel_counter % granular.channels.len();
         granular.channel_counter = granular.channel_counter.wrapping_add(1);
         let channel = &granular.channels[channel_idx];
         let active = granular.configured_wavs.max(1).min(granular.sources.len());
-        let source_index = (granular.source_offset + channel.source_index % active) % granular.sources.len();
+        let source_index =
+            (granular.source_offset + channel.source_index % active) % granular.sources.len();
         (source_index, channel.detune_ratio)
     };
     debug_assert!(source_index < granular.sources.len());
@@ -182,8 +186,7 @@ pub(crate) fn spawn_grain(
     } else {
         granular.config.grain_size_ms
     };
-    let note_len_samples =
-        ((note_ms.max(1.0) / 1000.0) * output_sample_rate) as usize;
+    let note_len_samples = ((note_ms.max(1.0) / 1000.0) * output_sample_rate) as usize;
     let note_len_samples = note_len_samples.max(8);
 
     // Compute the source-space window this grain loops through.
@@ -198,20 +201,22 @@ pub(crate) fn spawn_grain(
     // Clamp window to what's actually available in the source from start_sample.
     let max_start = source_len.saturating_sub(window_source_samples.max(2) + 1);
     let start_sample = position * max_start as f32;
-    let avail = source_len.saturating_sub(start_sample as usize).saturating_sub(2);
+    let avail = source_len
+        .saturating_sub(start_sample as usize)
+        .saturating_sub(2);
     let window_source_samples = window_source_samples.min(avail).max(1);
 
     // Base C2 is used by the wavetable drone path, so we keep pitch relationships aligned.
     let root_ratio = (base_frequency_hz / C2_FREQUENCY_HZ).max(0.01);
     let fine_ratio = 2.0f32.powf(fine_tune_cents / 1200.0);
-    
+
     // Fold oscillator detune into one octave, producing the half-open range [-700, +500) cents
     // ([-7, +5) semitones). This prevents chipmunk-style pitch jumps when the oscillator
     // detune spans multiple octaves from scale/spread logic.
     let detune_cents = 1200.0 * osc.detune_ratio.max(f32::MIN_POSITIVE).log2();
     let folded_cents = (detune_cents + 700.0).rem_euclid(1200.0) - 700.0;
     let grain_detune_ratio = 2.0f32.powf(folded_cents / 1200.0);
-    
+
     let playback_ratio = root_ratio
         * fine_ratio
         * grain_detune_ratio
@@ -273,7 +278,10 @@ mod tests {
         };
 
         // +500 cents wraps to -700 (the fold boundary, half-open at +500)
-        assert!((apply(500.0) - 2.0f32.powf(-700.0/1200.0)).abs() < 1e-4, "+5st should fold to -7st boundary");
+        assert!(
+            (apply(500.0) - 2.0f32.powf(-700.0 / 1200.0)).abs() < 1e-4,
+            "+5st should fold to -7st boundary"
+        );
     }
 
     #[test]
@@ -284,6 +292,9 @@ mod tests {
         };
 
         // +499 cents stays near +499 (just inside boundary)
-        assert!(apply(499.0) > 2.0f32.powf(498.0/1200.0), "+499 cents should be positive detune");
+        assert!(
+            apply(499.0) > 2.0f32.powf(498.0 / 1200.0),
+            "+499 cents should be positive detune"
+        );
     }
 }

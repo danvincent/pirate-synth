@@ -52,9 +52,7 @@ fn parse_usize_arg(key: &str, value: &str) -> Result<usize> {
 
 fn parse_args() -> Result<Args> {
     let mut raw = std::env::args();
-    let program = raw
-        .next()
-        .unwrap_or_else(|| "render_granular".to_owned());
+    let program = raw.next().unwrap_or_else(|| "render_granular".to_owned());
     let mut iter = raw;
 
     let mut args = Args {
@@ -157,13 +155,15 @@ fn write_wav_header(
     let data_chunk_size = u32::try_from(num_frames)
         .ok()
         .and_then(|frames| frames.checked_mul(frame_bytes))
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "frame count too large"))?;
-    let riff_chunk_size = 36u32
-        .checked_add(data_chunk_size)
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "wav size too large"))?;
-    let byte_rate = sample_rate
-        .checked_mul(frame_bytes)
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "sample rate too large"))?;
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "frame count too large")
+        })?;
+    let riff_chunk_size = 36u32.checked_add(data_chunk_size).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "wav size too large")
+    })?;
+    let byte_rate = sample_rate.checked_mul(frame_bytes).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "sample rate too large")
+    })?;
     let block_align = 4u16;
 
     writer.write_all(b"RIFF")?;
@@ -313,7 +313,10 @@ mod tests {
         let mut bytes = Vec::new();
         write_wav_header(&mut bytes, 48_000, 100).unwrap();
 
-        assert_eq!(u32::from_le_bytes(bytes[28..32].try_into().unwrap()), 192_000);
+        assert_eq!(
+            u32::from_le_bytes(bytes[28..32].try_into().unwrap()),
+            192_000
+        );
     }
 
     #[test]

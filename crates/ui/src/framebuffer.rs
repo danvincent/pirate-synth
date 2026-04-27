@@ -1,7 +1,7 @@
+use crate::font::FONT_DATA;
+use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
-use anyhow::{Context, Result};
-use crate::font::FONT_DATA;
 
 pub struct Framebuffer {
     pub(crate) width: u16,
