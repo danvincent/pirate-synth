@@ -22,6 +22,8 @@ pub enum Button {
     Down,
     Select,
     Back,
+    Left,
+    Right,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,8 +107,8 @@ impl MenuState {
             Button::Down => {
                 self.selected_item = (self.selected_item + 1) % self.total_items();
             }
-            Button::Select => self.increment_selected_value(),
-            Button::Back => self.decrement_selected_value(),
+            Button::Select | Button::Right => self.increment_selected_value(),
+            Button::Back | Button::Left => self.decrement_selected_value(),
         }
 
         // Adjust scroll offset to keep selected_item visible
@@ -370,5 +372,35 @@ mod tests {
         menu2.selected_item = 11;
         menu2.apply_button(Button::Back);
         assert_eq!(menu2.gr_voices, 0, "gr_voices should allow zero");
+    }
+
+    #[test]
+    fn test_button_left_acts_as_back() {
+        let mut left_menu = MenuState::new(0.0, 8, 8);
+        left_menu.selected_item = 2;
+
+        let mut back_menu = left_menu.clone();
+
+        left_menu.apply_button(Button::Left);
+        back_menu.apply_button(Button::Back);
+
+        assert_eq!(left_menu.lines(), back_menu.lines());
+        assert_eq!(left_menu.selected_item, back_menu.selected_item);
+        assert_eq!(left_menu.scroll_offset, back_menu.scroll_offset);
+    }
+
+    #[test]
+    fn test_button_right_acts_as_select() {
+        let mut right_menu = MenuState::new(0.0, 8, 8);
+        right_menu.selected_item = 2;
+
+        let mut select_menu = right_menu.clone();
+
+        right_menu.apply_button(Button::Right);
+        select_menu.apply_button(Button::Select);
+
+        assert_eq!(right_menu.lines(), select_menu.lines());
+        assert_eq!(right_menu.selected_item, select_menu.selected_item);
+        assert_eq!(right_menu.scroll_offset, select_menu.scroll_offset);
     }
 }

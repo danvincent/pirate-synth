@@ -12,7 +12,7 @@ use engine::{
 use log::{debug, info, warn};
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use serde::Deserialize;
-use ui::{ButtonReader, MenuState, St7789Display, VideoStatus};
+use ui::{ButtonConfig, ButtonReader, MenuState, St7789Display, VideoStatus};
 use visuals_drm::{try_spawn_visuals, VisualsInitError};
 
 const DEFAULT_CONFIG_PATH: &str = "/etc/pirate-synth/config.toml";
@@ -855,7 +855,8 @@ fn main() -> Result<()> {
     );
 
     info!("initializing button GPIO inputs");
-    let mut buttons = ButtonReader::new().context("failed to configure Pirate Audio buttons")?;
+    let mut buttons = ButtonReader::new(ButtonConfig::pirate_audio())
+        .context("failed to configure Pirate Audio buttons")?;
     info!("button GPIO inputs initialized");
     let midi = match initialize_midi() {
         Ok(runtime) => runtime,

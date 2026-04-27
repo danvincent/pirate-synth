@@ -43,7 +43,7 @@ pub(crate) fn parse_spi_device(spi_path: &str) -> Result<(Bus, SlaveSelect)> {
 	Ok((bus, slave_select))
 }
 
-pub use buttons::ButtonReader;
+pub use buttons::{ButtonConfig, ButtonReader};
 pub use ili9341::Ili9341Display;
 pub use display::St7789Display;
 pub use menu::{Button, MenuState, VideoStatus, KEY_NAMES, SCALE_NAMES, BANK_NAMES};
