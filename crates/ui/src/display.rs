@@ -241,7 +241,7 @@ pub(crate) fn build_idle_framebuffer(
     let fb_width = fb.width() as i32;
 
     let key = state.key_name();
-    let key_total_w = key.chars().count() as i32 * 32;
+    let key_total_w = key.chars().count() as i32 * 36;
     let key_x = (fb_width - key_total_w) / 2;
     fb.draw_text_4x(key_x, 10, key, 0xFFFF, 0x0000);
 
@@ -249,7 +249,7 @@ pub(crate) fn build_idle_framebuffer(
     fb.draw_text_2x(key_x + key_total_w + 4, 28, &octave_str, 0x07E0, 0x0000);
 
     let scale = SCALE_NAMES[state.scale_index];
-    let scale_w = scale.chars().count() as i32 * 16;
+    let scale_w = scale.chars().count() as i32 * 18;
     fb.draw_text_2x((fb_width - scale_w) / 2, 58, scale, 0xAD55, 0x0000);
 
     draw_idle_volume_bar(
@@ -278,7 +278,7 @@ pub(crate) fn build_idle_framebuffer(
     };
     draw_idle_sine_wave(&mut fb, 195, wave_color);
 
-    let hostname_x = ((fb_width - hostname.chars().count() as i32 * 8) / 2).max(0);
+    let hostname_x = ((fb_width - hostname.chars().count() as i32 * 9) / 2).max(0);
     fb.draw_text(hostname_x, 226, hostname, 0x4208, 0x0000);
 
     fb

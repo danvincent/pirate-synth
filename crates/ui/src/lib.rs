@@ -6,6 +6,8 @@ mod display;
 mod font;
 mod framebuffer;
 mod ili9341;
+mod joystick;
+mod linuxfb;
 mod menu;
 
 pub(crate) fn parse_spi_device(spi_path: &str) -> Result<(Bus, SlaveSelect)> {
@@ -46,4 +48,6 @@ pub(crate) fn parse_spi_device(spi_path: &str) -> Result<(Bus, SlaveSelect)> {
 pub use buttons::{ButtonConfig, ButtonReader};
 pub use display::St7789Display;
 pub use ili9341::Ili9341Display;
+pub use joystick::JoystickButtonReader;
+pub use linuxfb::LinuxFbDisplay;
 pub use menu::{Button, MenuState, VideoStatus, BANK_NAMES, KEY_NAMES, SCALE_NAMES};

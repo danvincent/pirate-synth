@@ -13,7 +13,8 @@ use log::{debug, info, warn};
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use serde::Deserialize;
 use ui::{
-    Button, ButtonConfig, ButtonReader, Ili9341Display, MenuState, St7789Display, VideoStatus,
+    ButtonConfig, ButtonReader, Ili9341Display, JoystickButtonReader, LinuxFbDisplay,
+    MenuState, St7789Display, VideoStatus,
 };
 use visuals_drm::{try_spawn_visuals, VisualsInitError};
 
@@ -699,31 +700,21 @@ impl HardwareProfile {
     fn default_backlight_pin(self) -> Option<u8> {
         match self {
             Self::PirateAudio => Some(13),
-            Self::GpiCase => Some(24),
+            Self::GpiCase => None,
         }
     }
 
     fn default_alsa_device(self) -> Option<&'static str> {
         match self {
             Self::PirateAudio => None,
-            Self::GpiCase => Some("plughw:0,0"),
+            Self::GpiCase => Some("plughw:Headphones"),
         }
     }
 
     fn button_config(self) -> Result<ButtonConfig> {
         match self {
             Self::PirateAudio => Ok(ButtonConfig::pirate_audio()),
-            Self::GpiCase => ButtonConfig::new(
-                vec![
-                    (17, Button::Up),
-                    (22, Button::Down),
-                    (27, Button::Left),
-                    (23, Button::Right),
-                    (16, Button::Select),
-                    (13, Button::Back),
-                ],
-                Some(26),
-            ),
+            Self::GpiCase => ButtonConfig::new(vec![], Some(26)),
         }
     }
 }
@@ -750,7 +741,9 @@ fn resolve_backlight_pin(profile: &HardwareProfile, config: &AppConfig) -> Optio
 
 enum AnyDisplay {
     St7789(St7789Display),
+    #[allow(dead_code)]
     Ili9341(Ili9341Display),
+    LinuxFb(LinuxFbDisplay),
 }
 
 impl AnyDisplay {
@@ -758,6 +751,7 @@ impl AnyDisplay {
         match self {
             Self::St7789(display) => display.draw_menu(state),
             Self::Ili9341(display) => display.draw_menu(state),
+            Self::LinuxFb(display) => display.draw_menu(state),
         }
     }
 
@@ -765,6 +759,7 @@ impl AnyDisplay {
         match self {
             Self::St7789(display) => display.draw_idle_screen(state, hostname),
             Self::Ili9341(display) => display.draw_idle_screen(state, hostname),
+            Self::LinuxFb(display) => display.draw_idle_screen(state, hostname),
         }
     }
 
@@ -772,6 +767,7 @@ impl AnyDisplay {
         match self {
             Self::St7789(display) => display.draw_powering_down_screen(),
             Self::Ili9341(display) => display.draw_powering_down_screen(),
+            Self::LinuxFb(display) => display.draw_powering_down_screen(),
         }
     }
 
@@ -779,6 +775,7 @@ impl AnyDisplay {
         match self {
             Self::St7789(display) => display.clear_and_backlight_off(),
             Self::Ili9341(display) => display.clear_and_backlight_off(),
+            Self::LinuxFb(display) => display.clear_and_backlight_off(),
         }
     }
 }
@@ -791,6 +788,9 @@ struct HardwareBuild {
     spi_device: String,
     dc_pin: u8,
     backlight_pin: Option<u8>,
+    #[allow(dead_code)]
+    power_latch: Option<rppal::gpio::OutputPin>,
+    joystick_reader: Option<JoystickButtonReader>,
 }
 
 fn build_hardware(config: &AppConfig) -> Result<HardwareBuild> {
@@ -803,14 +803,21 @@ fn build_hardware(config: &AppConfig) -> Result<HardwareBuild> {
         .default_alsa_device()
         .map(|device| device.to_string());
 
-    let display = match profile {
+    let (display, power_latch, joystick_reader) = match profile {
         HardwareProfile::PirateAudio => {
-            AnyDisplay::St7789(St7789Display::new(&spi_device, dc_pin, backlight_pin)?)
+            let d = AnyDisplay::St7789(St7789Display::new(&spi_device, dc_pin, backlight_pin)?);
+            (d, None, None)
         }
         HardwareProfile::GpiCase => {
-            let mut display = Ili9341Display::new(&spi_device, dc_pin, backlight_pin)?;
-            display.init()?;
-            AnyDisplay::Ili9341(display)
+            let d = AnyDisplay::LinuxFb(LinuxFbDisplay::new("/dev/fb0", 320, 240)?);
+            let gpio = rppal::gpio::Gpio::new().context("failed to open GPIO")?;
+            let latch = gpio
+                .get(27)
+                .context("failed to get BCM27 (power latch)")?
+                .into_output_high();
+            let joystick = JoystickButtonReader::new("/dev/input/js0")
+                .context("failed to open joystick /dev/input/js0")?;
+            (d, Some(latch), Some(joystick))
         }
     };
 
@@ -822,6 +829,8 @@ fn build_hardware(config: &AppConfig) -> Result<HardwareBuild> {
         spi_device,
         dc_pin,
         backlight_pin,
+        power_latch,
+        joystick_reader,
     })
 }
 
@@ -989,7 +998,7 @@ fn main() -> Result<()> {
         config.spi_device
     );
 
-    let hardware = build_hardware(&config)?;
+    let mut hardware = build_hardware(&config)?;
 
     let initial_bank = ui::BANK_NAMES
         .get(config.bank_index)
@@ -1120,7 +1129,7 @@ fn main() -> Result<()> {
         // Shutdown combo: Up + Down held together for 5 seconds triggers a safe shutdown.
         // Checked before the idle logic so the combo is not interrupted by the idle screen.
         let raw = buttons.raw_states();
-        if raw[0] && raw[1] {
+        if raw.len() >= 2 && raw[0] && raw[1] {
             last_activity = Instant::now();
             match shutdown_combo_start {
                 None => shutdown_combo_start = Some(Instant::now()),
@@ -1207,7 +1216,12 @@ fn main() -> Result<()> {
             }
         }
 
-        if let Some(button) = buttons.poll_pressed()? {
+        let joystick_button = hardware
+            .joystick_reader
+            .as_mut()
+            .and_then(|jr| jr.poll_pressed());
+        let button_press = buttons.poll_pressed()?.or(joystick_button);
+        if let Some(button) = button_press {
             last_activity = Instant::now();
 
             // If idle, any key wakes the display and resumes the menu

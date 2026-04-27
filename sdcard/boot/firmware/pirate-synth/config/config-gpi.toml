@@ -8,7 +8,7 @@
 hardware_profile = "gpi-case"
 sample_rate   = 24000    # Hz — intentionally low for the hardware; 48000 for higher quality audio (more CPU)
 buffer_frames = 256     # ALSA buffer size; increase if you hear glitches
-spi_device    = "/dev/spidev0.0"
+# spi_device is intentionally omitted for GPi framebuffer mode
 
 # ── Root note ─────────────────────────────────────────────────────────────────
 root_key    = "A"   # C C# D D# E F F# G G# A A# B
@@ -25,7 +25,7 @@ stereo_spread  = 100  # 0–100 — how wide oscillators are spread across stere
 
 # ── Oscillators ───────────────────────────────────────────────────────────────
 oscillators       = 16      # Number of wavetable oscillators (1–64)
-oscillators_active = false  # Set true to start with WT oscillators on at boot
+oscillators_active = false   # Set true to start with WT oscillators on at boot
 wavetable_dir = "/var/lib/pirate-synth/wavetables"
 # Wavetable bank: 0=A 1=B 2=C 3=D
 bank_index = 3

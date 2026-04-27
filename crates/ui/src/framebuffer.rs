@@ -50,7 +50,7 @@ impl Framebuffer {
 
     pub(crate) fn draw_text(&mut self, x: i32, y: i32, text: &str, fg: u16, bg: u16) {
         for (idx, ch) in text.chars().enumerate() {
-            self.draw_char(x + (idx as i32 * 8), y, ch, fg, bg);
+            self.draw_char(x + (idx as i32 * 9), y, ch, fg, bg);
         }
     }
 
@@ -104,7 +104,7 @@ impl Framebuffer {
 
     pub(crate) fn draw_text_2x(&mut self, x: i32, y: i32, text: &str, fg: u16, bg: u16) {
         for (idx, ch) in text.chars().enumerate() {
-            self.draw_char_2x(x + (idx as i32 * 16), y, ch, fg, bg);
+            self.draw_char_2x(x + (idx as i32 * 18), y, ch, fg, bg);
         }
     }
 
@@ -137,7 +137,7 @@ impl Framebuffer {
 
     pub(crate) fn draw_text_4x(&mut self, x: i32, y: i32, text: &str, fg: u16, bg: u16) {
         for (idx, ch) in text.chars().enumerate() {
-            self.draw_char_4x(x + (idx as i32 * 32), y, ch, fg, bg);
+            self.draw_char_4x(x + (idx as i32 * 36), y, ch, fg, bg);
         }
     }
 
