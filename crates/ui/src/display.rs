@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use rppal::gpio::OutputPin;
-use rppal::spi::{Bus, Mode, SlaveSelect, Spi};
+use rppal::spi::{Mode, Spi};
 use std::path::Path;
 use crate::framebuffer::Framebuffer;
 use crate::menu::{MenuState, SCALE_NAMES};
+use crate::parse_spi_device;
 
 // Keep SPI transfers small to avoid EMSGSIZE from Linux spidev on constrained targets.
 pub(crate) const SPI_FRAMEBUFFER_CHUNK_SIZE: usize = 4096;
@@ -13,17 +14,19 @@ pub struct St7789Display {
     spi: Spi,
     dc: OutputPin,
     backlight: Option<OutputPin>,
+    width: u16,
+    height: u16,
 }
 
 impl St7789Display {
-    pub fn new(spi_path: &str, dc_pin: u32, backlight_pin: Option<u32>) -> Result<Self> {
+    pub fn new(spi_path: &str, dc_pin: u8, backlight_pin: Option<u8>) -> Result<Self> {
         let (bus, slave_select) = parse_spi_device(spi_path)?;
         let spi = Spi::new(bus, slave_select, SPI_CLOCK_HZ, Mode::Mode0)
             .with_context(|| format!("failed to open SPI device {spi_path}"))?;
 
         let gpio = rppal::gpio::Gpio::new().context("failed to open GPIO controller")?;
         let mut dc = gpio
-            .get(dc_pin as u8)
+            .get(dc_pin)
             .with_context(|| format!("failed to open BCM gpio{dc_pin} (display DC)"))?
             .into_output();
         dc.set_low();
@@ -31,16 +34,22 @@ impl St7789Display {
         let backlight = match backlight_pin {
             Some(pin) => {
                 let mut p = gpio
-                    .get(pin as u8)
+                    .get(pin)
                     .with_context(|| format!("failed to open BCM gpio{pin} (backlight)"))?
                     .into_output();
-                p.set_high();
+                p.set_low();
                 Some(p)
             }
             None => None,
         };
 
-        let mut display = Self { spi, dc, backlight };
+        let mut display = Self {
+            spi,
+            dc,
+            backlight,
+            width: 240,
+            height: 240,
+        };
         display.init()?;
         Ok(display)
     }
@@ -79,33 +88,34 @@ impl St7789Display {
     }
 
     pub fn draw_menu(&mut self, state: &MenuState) -> Result<()> {
-        let fb = build_menu_framebuffer(state);
+        let fb = build_menu_framebuffer(state, self.width, self.height);
         self.write_full_framebuffer(&fb.to_bytes())?;
         Ok(())
     }
 
     pub fn draw_menu_to_ppm(state: &MenuState, path: &Path) -> Result<()> {
-        build_menu_framebuffer(state).save_ppm(path)
+        build_menu_framebuffer(state, 240, 240).save_ppm(path)
     }
 
     pub fn draw_idle_screen(&mut self, state: &MenuState, hostname: &str) -> Result<()> {
-        let fb = build_idle_framebuffer(state, hostname);
+        let fb = build_idle_framebuffer(state, hostname, self.width, self.height);
         self.write_full_framebuffer(&fb.to_bytes())?;
         Ok(())
     }
 
     pub fn draw_powering_down_screen(&mut self) -> Result<()> {
-        let mut fb = Framebuffer::new(240, 240);
+        let mut fb = Framebuffer::new(self.width, self.height);
         fb.clear(0x0000);
+        let fb_width = fb.width() as i32;
 
         let line1 = "Powering";
         let line1_w = line1.chars().count() as i32 * 16;
-        let line1_x = (240 - line1_w) / 2;
+        let line1_x = (fb_width - line1_w) / 2;
         fb.draw_text_2x(line1_x, 96, line1, 0xF800, 0x0000);
 
         let line2 = "down";
         let line2_w = line2.chars().count() as i32 * 16;
-        let line2_x = (240 - line2_w) / 2;
+        let line2_x = (fb_width - line2_w) / 2;
         fb.draw_text_2x(line2_x, 122, line2, 0xF800, 0x0000);
 
         self.write_full_framebuffer(&fb.to_bytes())?;
@@ -113,7 +123,7 @@ impl St7789Display {
     }
 
     pub fn clear_and_backlight_off(&mut self) -> Result<()> {
-        let fb = Framebuffer::new(240, 240);
+        let fb = Framebuffer::new(self.width, self.height);
         self.write_full_framebuffer(&fb.to_bytes())?;
         if let Some(ref mut backlight) = self.backlight {
             backlight.set_low();
@@ -139,13 +149,14 @@ impl St7789Display {
     }
 }
 
-pub(crate) fn build_menu_framebuffer(state: &MenuState) -> Framebuffer {
+pub(crate) fn build_menu_framebuffer(state: &MenuState, width: u16, height: u16) -> Framebuffer {
     const VISIBLE_ROWS: usize = 11;
     let selected_item = state.selected_item;
     let scroll_offset = state.scroll_offset;
 
-    let mut fb = Framebuffer::new(240, 240);
+    let mut fb = Framebuffer::new(width, height);
     fb.clear(0x0000);
+    let fb_width = fb.width() as i32;
 
     draw_menu_status_panel(&mut fb, "WT", state.oscillators_active, state.wt_volume, 0, 0x07E0, 0x2945);
     fb.fill_rect(116, 0, 8, 13, 0x0000);
@@ -156,7 +167,7 @@ pub(crate) fn build_menu_framebuffer(state: &MenuState) -> Framebuffer {
     let status = format!("{} {}", key_octave, scale_name);
     fb.draw_text(4, 16, &status, 0xFFFF, 0x0000);
 
-    fb.fill_rect(0, 26, 240, 2, 0x4208);
+    fb.fill_rect(0, 26, fb_width, 2, 0x4208);
 
     let lines = state.lines();
     for (visual_row, line) in lines.iter().skip(scroll_offset).take(VISIBLE_ROWS).enumerate() {
@@ -198,13 +209,19 @@ fn draw_menu_status_panel(
     fb.fill_rect(x_offset + 48, 9, bar_w, 2, bar_color);
 }
 
-pub(crate) fn build_idle_framebuffer(state: &MenuState, hostname: &str) -> Framebuffer {
-    let mut fb = Framebuffer::new(240, 240);
+pub(crate) fn build_idle_framebuffer(
+    state: &MenuState,
+    hostname: &str,
+    width: u16,
+    height: u16,
+) -> Framebuffer {
+    let mut fb = Framebuffer::new(width, height);
     fb.clear(0x0000);
+    let fb_width = fb.width() as i32;
 
     let key = state.key_name();
     let key_total_w = key.chars().count() as i32 * 32;
-    let key_x = (240 - key_total_w) / 2;
+    let key_x = (fb_width - key_total_w) / 2;
     fb.draw_text_4x(key_x, 10, key, 0xFFFF, 0x0000);
 
     let octave_str = format!("{}", state.octave);
@@ -212,7 +229,7 @@ pub(crate) fn build_idle_framebuffer(state: &MenuState, hostname: &str) -> Frame
 
     let scale = SCALE_NAMES[state.scale_index];
     let scale_w = scale.chars().count() as i32 * 16;
-    fb.draw_text_2x((240 - scale_w) / 2, 58, scale, 0xAD55, 0x0000);
+    fb.draw_text_2x((fb_width - scale_w) / 2, 58, scale, 0xAD55, 0x0000);
 
     draw_idle_volume_bar(&mut fb, state.oscillators_active, state.wt_volume, 35, 0x07E0, 0x2945, "WT");
     draw_idle_volume_bar(&mut fb, state.granular_active, state.gr_volume, 155, 0x001F, 0x2945, "GR");
@@ -220,7 +237,7 @@ pub(crate) fn build_idle_framebuffer(state: &MenuState, hostname: &str) -> Frame
     let wave_color: u16 = if state.oscillators_active || state.granular_active { 0x4208 } else { 0x2104 };
     draw_idle_sine_wave(&mut fb, 195, wave_color);
 
-    let hostname_x = ((240 - hostname.chars().count() as i32 * 8) / 2).max(0);
+    let hostname_x = ((fb_width - hostname.chars().count() as i32 * 8) / 2).max(0);
     fb.draw_text(hostname_x, 226, hostname, 0x4208, 0x0000);
 
     fb
@@ -252,10 +269,12 @@ fn draw_idle_volume_bar(
 
 /// Draw a decorative sine-wave line across the idle screen.
 fn draw_idle_sine_wave(fb: &mut Framebuffer, y_center: i32, color: u16) {
-    for x in 0..240usize {
-        let t = x as f32 * std::f32::consts::TAU / 240.0 * 2.5;
+    let width = fb.width() as usize;
+    let height = fb.height() as i32;
+    for x in 0..width {
+        let t = x as f32 * std::f32::consts::TAU / width as f32 * 2.5;
         let y_px = y_center + (t.sin() * 14.0) as i32;
-        if y_px >= 0 && y_px < 239 {
+        if y_px >= 0 && y_px + 1 < height {
             fb.set_pixel(x, y_px as usize, color);
             fb.set_pixel(x, (y_px + 1) as usize, color);
         }
@@ -272,47 +291,14 @@ where
     Ok(())
 }
 
-fn parse_spi_device(spi_path: &str) -> Result<(Bus, SlaveSelect)> {
-    let device = spi_path.rsplit('/').next().unwrap_or(spi_path);
-    let mut parts = device.split('.');
-    let bus_name = parts
-        .next()
-        .with_context(|| format!("invalid SPI device path {spi_path}"))?;
-    let chip_select = parts
-        .next()
-        .with_context(|| format!("invalid SPI device path {spi_path}"))?;
-    if parts.next().is_some() {
-        anyhow::bail!("invalid SPI device path {spi_path}");
-    }
-
-    let bus = match bus_name {
-        "spidev0" => Bus::Spi0,
-        "spidev1" => Bus::Spi1,
-        "spidev2" => Bus::Spi2,
-        "spidev3" => Bus::Spi3,
-        "spidev4" => Bus::Spi4,
-        "spidev5" => Bus::Spi5,
-        "spidev6" => Bus::Spi6,
-        _ => anyhow::bail!("unsupported SPI bus in {spi_path}; expected /dev/spidevN.M"),
-    };
-
-    let slave_select = match chip_select {
-        "0" => SlaveSelect::Ss0,
-        "1" => SlaveSelect::Ss1,
-        "2" => SlaveSelect::Ss2,
-        "3" => SlaveSelect::Ss3,
-        _ => anyhow::bail!("unsupported SPI chip-select in {spi_path}; expected 0-3"),
-    };
-
-    Ok((bus, slave_select))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn parse_spi_device_accepts_common_paths() {
+        use rppal::spi::{Bus, SlaveSelect};
+
         assert_eq!(
             parse_spi_device("/dev/spidev0.0").unwrap(),
             (Bus::Spi0, SlaveSelect::Ss0)
@@ -362,7 +348,7 @@ mod tests {
     #[test]
     fn build_menu_framebuffer_has_correct_dimensions() {
         let state = MenuState::new(0.0, 4, 4);
-        let fb = build_menu_framebuffer(&state);
+        let fb = build_menu_framebuffer(&state, 240, 240);
         assert_eq!(fb.width, 240);
         assert_eq!(fb.height, 240);
     }
@@ -375,10 +361,10 @@ mod tests {
         state.wt_volume = 80;
         state.gr_volume = 20;
 
-        let fb_on = build_menu_framebuffer(&state);
+        let fb_on = build_menu_framebuffer(&state, 240, 240);
 
         state.oscillators_active = false;
-        let fb_off = build_menu_framebuffer(&state);
+        let fb_off = build_menu_framebuffer(&state, 240, 240);
 
         // The WT header region should differ between active/inactive oscillators
         assert_ne!(
@@ -391,7 +377,7 @@ mod tests {
     #[test]
     fn build_idle_framebuffer_has_correct_dimensions() {
         let state = MenuState::new(0.0, 4, 4);
-        let fb = build_idle_framebuffer(&state, "myhost");
+        let fb = build_idle_framebuffer(&state, "myhost", 240, 240);
         assert_eq!(fb.width, 240);
         assert_eq!(fb.height, 240);
     }
@@ -402,10 +388,10 @@ mod tests {
         state.oscillators_active = false;
         state.granular_active = true;
 
-        let fb_active = build_idle_framebuffer(&state, "host");
+        let fb_active = build_idle_framebuffer(&state, "host", 240, 240);
 
         state.granular_active = false;
-        let fb_inactive = build_idle_framebuffer(&state, "host");
+        let fb_inactive = build_idle_framebuffer(&state, "host", 240, 240);
 
         assert_ne!(
             fb_active.to_bytes(),
@@ -422,11 +408,11 @@ mod tests {
         state.scroll_offset = 3;
 
         // Render with item 5 selected (scrolled so first visible is item 3)
-        let fb_sel5 = build_menu_framebuffer(&state);
+        let fb_sel5 = build_menu_framebuffer(&state, 240, 240);
 
         // Now select a different item in the same visible window — framebuffer must differ
         state.selected_item = 4;
-        let fb_sel4 = build_menu_framebuffer(&state);
+        let fb_sel4 = build_menu_framebuffer(&state, 240, 240);
 
         assert_ne!(
             fb_sel5.to_bytes(),
