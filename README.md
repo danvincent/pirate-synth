@@ -50,11 +50,14 @@ Outputs:
 - `dist/pirate-synth-sdcard.zip`
 - `dist/pirate-synth-sdcard-armv6.tar.gz`
 - `dist/pirate-synth-sdcard-armv6.zip`
+- `dist/pirate-synth-sdcard-gpi.tar.gz`
+- `dist/pirate-synth-sdcard-gpi.zip`
 
 Artifact targets:
 
 - `pirate-synth-sdcard.*`: existing `arm-unknown-linux-gnueabihf` build (ARMv7+ armhf Linux target, e.g. Pi 2/3/4 running 32-bit Raspberry Pi OS)
 - `pirate-synth-sdcard-armv6.*`: Pi Zero / Zero W compatible ARMv6 build
+- `pirate-synth-sdcard-gpi.*`: GPi CASE bundle for Pi Zero / Zero W using the GPi hardware profile
 
 To package with a prebuilt ARMv6 binary (used by CI), set:
 
@@ -69,6 +72,34 @@ PIRATE_SYNTH_ARMV6_BINARY=/absolute/path/to/pirate_synth ./scripts/package.sh
 3. Extract `pirate-synth-sdcard.tar.gz` (or zip).
 4. Copy `boot/firmware/*` from the extracted bundle onto the SD card boot partition.
 5. Boot the Pi Zero.
+
+## GPi CASE Setup
+
+The GPi CASE uses the Retroflag GPi CASE with a Raspberry Pi Zero.
+
+Prerequisites:
+
+- Raspberry Pi Zero or Zero W
+- Retroflag GPi CASE
+- Raspberry Pi OS Lite
+
+Install steps:
+
+1. Download the `pirate-synth-sdcard-gpi` bundle (`.tar.gz` or `.zip`).
+2. Flash Raspberry Pi OS Lite to SD card.
+3. Mount the boot partition.
+4. Extract the GPi bundle.
+5. Copy `boot/firmware/*` from the extracted bundle onto the SD card boot partition.
+6. Insert SD card into the GPi CASE and boot.
+
+Controls:
+
+- D-pad Up/Down: navigate menu
+- D-pad Left: Back
+- D-pad Right: Select
+- Hold Up + Down for 5 seconds: safe shutdown
+
+Note: A/B/X/Y/Start/Select buttons are not used.
 
 ## What first boot does
 
