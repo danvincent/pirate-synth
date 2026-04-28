@@ -91,8 +91,9 @@ impl LinuxFbDisplay {
         let mut fb = Framebuffer::new(self.width, self.height);
         fb.clear(0x0000);
         let fb_width = fb.width() as i32;
-        // text_width_2x computes the rendered width of text in draw_text_2x (18px stride,
-        // 1px inter-character spacing removed from the trailing glyph).
+        // text_width_2x computes the rendered pixel width of text drawn by draw_text_2x.
+        // Each character advances 18px (16px glyph at 2× scale + 2px inter-glyph gap).
+        // The last character has no trailing gap, so total = (n-1)*18 + 16 = n*18 - 2.
         let text_width_2x = |text: &str| -> i32 {
             let chars = text.chars().count() as i32;
             if chars == 0 { 0 } else { chars * 18 - 2 }
