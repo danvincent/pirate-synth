@@ -133,11 +133,26 @@ mod tests {
         [b8, g8, r8, 0xFF]
     }
 
-    /// Create a temporary writable file and return its path.
-    fn temp_fb_file(tag: &str) -> std::path::PathBuf {
-        let path = env::temp_dir().join(format!("pirate_synth_test_fb_{tag}.bin"));
-        fs::write(&path, b"").expect("failed to create temp fb file");
-        path
+    /// RAII guard that deletes its file on drop, ensuring cleanup even if tests panic.
+    struct TempFile(std::path::PathBuf);
+
+    impl TempFile {
+        /// Create an empty writable file and return a guard.
+        fn new(tag: &str) -> Self {
+            let path = env::temp_dir().join(format!("pirate_synth_test_fb_{tag}.bin"));
+            fs::write(&path, b"").expect("failed to create temp fb file");
+            TempFile(path)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
     }
 
     #[test]
@@ -188,111 +203,102 @@ mod tests {
 
     #[test]
     fn test_linuxfb_new_with_temp_file() {
-        let path = temp_fb_file("new");
-        let display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240);
+        let tmp = TempFile::new("new");
+        let display = LinuxFbDisplay::new(tmp.path().to_str().unwrap(), 240, 240);
         assert!(display.is_ok(), "LinuxFbDisplay::new must succeed with a valid writable file");
-        let _ = fs::remove_file(&path);
     }
 
     #[test]
     fn test_linuxfb_draw_menu_writes_correct_byte_count() {
-        let path = temp_fb_file("menu");
-        let mut display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240).unwrap();
+        let tmp = TempFile::new("menu");
+        let mut display = LinuxFbDisplay::new(tmp.path().to_str().unwrap(), 240, 240).unwrap();
         let state = MenuState::new(0.0, 4, 4);
         display.draw_menu(&state).expect("draw_menu must succeed");
-        let written = fs::read(&path).unwrap();
+        let written = fs::read(tmp.path()).unwrap();
         // 240 × 240 pixels × 4 bytes (BGRA8888) = 230 400
         assert_eq!(written.len(), 240 * 240 * 4, "draw_menu must write 240×240×4 bytes");
-        let _ = fs::remove_file(&path);
     }
 
     #[test]
     fn test_linuxfb_draw_menu_output_has_alpha_0xff() {
-        let path = temp_fb_file("menu_alpha");
-        let mut display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240).unwrap();
+        let tmp = TempFile::new("menu_alpha");
+        let mut display = LinuxFbDisplay::new(tmp.path().to_str().unwrap(), 240, 240).unwrap();
         let state = MenuState::new(0.0, 4, 4);
         display.draw_menu(&state).unwrap();
-        let written = fs::read(&path).unwrap();
+        let written = fs::read(tmp.path()).unwrap();
         // Every 4th byte is the alpha channel and must be 0xFF
         let all_opaque = written.chunks_exact(4).all(|px| px[3] == 0xFF);
         assert!(all_opaque, "alpha channel must be 0xFF for every pixel");
-        let _ = fs::remove_file(&path);
     }
 
     #[test]
     fn test_linuxfb_draw_idle_screen_writes_bytes() {
-        let path = temp_fb_file("idle");
-        let mut display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240).unwrap();
+        let tmp = TempFile::new("idle");
+        let mut display = LinuxFbDisplay::new(tmp.path().to_str().unwrap(), 240, 240).unwrap();
         let state = MenuState::new(0.0, 4, 4);
         display.draw_idle_screen(&state, "pirate").expect("draw_idle_screen must succeed");
-        let written = fs::read(&path).unwrap();
+        let written = fs::read(tmp.path()).unwrap();
         assert_eq!(written.len(), 240 * 240 * 4);
-        let _ = fs::remove_file(&path);
     }
 
     #[test]
     fn test_linuxfb_draw_idle_screen_differs_with_hostname() {
-        let path_a = temp_fb_file("idle_a");
-        let path_b = temp_fb_file("idle_b");
+        let tmp_a = TempFile::new("idle_a");
+        let tmp_b = TempFile::new("idle_b");
         let state = MenuState::new(0.0, 4, 4);
 
-        let mut disp_a = LinuxFbDisplay::new(path_a.to_str().unwrap(), 240, 240).unwrap();
+        let mut disp_a = LinuxFbDisplay::new(tmp_a.path().to_str().unwrap(), 240, 240).unwrap();
         disp_a.draw_idle_screen(&state, "hostname-a").unwrap();
 
-        let mut disp_b = LinuxFbDisplay::new(path_b.to_str().unwrap(), 240, 240).unwrap();
+        let mut disp_b = LinuxFbDisplay::new(tmp_b.path().to_str().unwrap(), 240, 240).unwrap();
         disp_b.draw_idle_screen(&state, "hostname-b").unwrap();
 
-        let a = fs::read(&path_a).unwrap();
-        let b = fs::read(&path_b).unwrap();
+        let a = fs::read(tmp_a.path()).unwrap();
+        let b = fs::read(tmp_b.path()).unwrap();
         assert_ne!(a, b, "idle screen output must differ for different hostnames");
-        let _ = fs::remove_file(&path_a);
-        let _ = fs::remove_file(&path_b);
     }
 
     #[test]
     fn test_linuxfb_draw_powering_down_screen_writes_bytes() {
-        let path = temp_fb_file("powerdown");
-        let mut display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240).unwrap();
+        let tmp = TempFile::new("powerdown");
+        let mut display = LinuxFbDisplay::new(tmp.path().to_str().unwrap(), 240, 240).unwrap();
         display
             .draw_powering_down_screen()
             .expect("draw_powering_down_screen must succeed");
-        let written = fs::read(&path).unwrap();
+        let written = fs::read(tmp.path()).unwrap();
         assert_eq!(written.len(), 240 * 240 * 4);
         // Red pixels (0xF800 → R=0xFF, G=0, B=0 → BGRA=[0,0,0xFF,0xFF]) must be present
         let has_red = written
             .chunks_exact(4)
             .any(|px| px[2] > 0xF0 && px[0] == 0 && px[1] == 0);
         assert!(has_red, "powering-down screen must contain at least one red pixel");
-        let _ = fs::remove_file(&path);
     }
 
     #[test]
     fn test_linuxfb_clear_and_backlight_off_writes_black_frame() {
-        let path = temp_fb_file("clear");
-        let mut display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240).unwrap();
+        let tmp = TempFile::new("clear");
+        let mut display = LinuxFbDisplay::new(tmp.path().to_str().unwrap(), 240, 240).unwrap();
         display
             .clear_and_backlight_off()
             .expect("clear_and_backlight_off must succeed");
-        let written = fs::read(&path).unwrap();
+        let written = fs::read(tmp.path()).unwrap();
         assert_eq!(written.len(), 240 * 240 * 4);
         // A cleared framebuffer is all black pixels: BGRA = [0, 0, 0, 0xFF]
         let all_black = written.chunks_exact(4).all(|px| px[0] == 0 && px[1] == 0 && px[2] == 0 && px[3] == 0xFF);
         assert!(all_black, "cleared framebuffer must contain only black pixels");
-        let _ = fs::remove_file(&path);
     }
 
     #[test]
     fn test_linuxfb_second_draw_overwrites_first() {
-        let path = temp_fb_file("overwrite");
-        let mut display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240).unwrap();
+        let tmp = TempFile::new("overwrite");
+        let mut display = LinuxFbDisplay::new(tmp.path().to_str().unwrap(), 240, 240).unwrap();
         let state = MenuState::new(0.0, 4, 4);
         display.draw_menu(&state).unwrap();
         display.clear_and_backlight_off().unwrap();
         // After clear, all pixels must be black
-        let written = fs::read(&path).unwrap();
+        let written = fs::read(tmp.path()).unwrap();
         let all_black = written.chunks_exact(4).all(|px| px[0] == 0 && px[1] == 0 && px[2] == 0 && px[3] == 0xFF);
         assert!(all_black, "second draw must overwrite first");
-        let _ = fs::remove_file(&path);
     }
 
     #[test]
