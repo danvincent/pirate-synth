@@ -5,7 +5,7 @@ use std::thread;
 
 use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender};
-use engine::{Engine, ScaleMode, Wavetable};
+use engine::{BytebeatAlgo, Engine, ScaleMode, Wavetable};
 
 #[derive(Clone, Debug)]
 pub struct AudioConfig {
@@ -60,6 +60,8 @@ pub enum AudioCommand {
     SetGranularVolume(u8),
     SetOscillatorCount(usize),
     SetGranularVoices(usize),
+    SetBytebeatAlgo(Option<BytebeatAlgo>),
+    SetBytebeatVolume(u8),
     Stop,
 }
 
@@ -129,6 +131,8 @@ fn run_audio_loop(
                 AudioCommand::SetGranularVolume(level) => engine.set_granular_volume(level),
                 AudioCommand::SetOscillatorCount(n) => engine.set_oscillator_count(n),
                 AudioCommand::SetGranularVoices(n) => engine.set_granular_voices(n),
+                AudioCommand::SetBytebeatAlgo(algo) => engine.set_bytebeat_algo(algo),
+                AudioCommand::SetBytebeatVolume(level) => engine.set_bytebeat_volume(level),
                 AudioCommand::Stop => {
                     drop(stdin);
                     let _ = child.wait();

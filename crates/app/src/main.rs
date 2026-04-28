@@ -7,7 +7,8 @@ use audio_alsa::{command_channel, spawn_audio_thread, AudioCommand, AudioConfig}
 use controller::SynthController;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use engine::{
-    key_to_frequency_hz, load_wav_sources, load_wavetables, Engine, GranularConfig, ScaleMode,
+    key_to_frequency_hz, load_wav_sources, load_wavetables, BytebeatAlgo, Engine, GranularConfig,
+    ScaleMode,
 };
 use log::{debug, info, warn};
 use midir::{Ignore, MidiInput, MidiInputConnection};
@@ -651,6 +652,20 @@ fn scale_mode_from_index(idx: usize) -> ScaleMode {
     }
 }
 
+/// Map a menu `bytebeat_algo_index` to an engine `BytebeatAlgo`.
+/// Index 0 means off (`None`); indices 1–5 map to the five formulas.
+fn bytebeat_algo_from_index(idx: usize) -> Option<BytebeatAlgo> {
+    match idx {
+        0 => None,
+        1 => Some(BytebeatAlgo::Basic),
+        2 => Some(BytebeatAlgo::Sierpinski),
+        3 => Some(BytebeatAlgo::Melody),
+        4 => Some(BytebeatAlgo::Harmony),
+        5 => Some(BytebeatAlgo::Acid),
+        _ => None,
+    }
+}
+
 fn load_bank(
     wavetable_dir: &Path,
     bank_name: &str,
@@ -1251,6 +1266,7 @@ fn main() -> Result<()> {
             let old_granular_active = menu.granular_active;
             let old_osc_count = menu.osc_count;
             let old_gr_voices = menu.gr_voices;
+            let old_bytebeat_algo = menu.bytebeat_algo_index;
 
             menu.apply_button(button);
             display.draw_menu(&menu)?;
@@ -1330,6 +1346,13 @@ fn main() -> Result<()> {
                 if let Err(err) = audio_tx.try_send(AudioCommand::SetGranularVoices(menu.gr_voices))
                 {
                     warn!("failed to send granular voices: {err}");
+                }
+            }
+
+            if menu.bytebeat_algo_index != old_bytebeat_algo {
+                let algo = bytebeat_algo_from_index(menu.bytebeat_algo_index);
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetBytebeatAlgo(algo)) {
+                    warn!("failed to send bytebeat algo to audio thread: {err}");
                 }
             }
         }

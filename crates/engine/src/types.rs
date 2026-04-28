@@ -67,6 +67,48 @@ pub struct GranularSource {
     pub samples: Vec<f32>,
 }
 
+/// Pre-built bytebeat formulas.  Each formula takes an integer time counter `t`
+/// (advancing at 8 kHz) and returns a raw `u8` sample value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BytebeatAlgo {
+    /// `t & (t >> 8)` – simple harmonic wave
+    Basic,
+    /// `(t * 5 & (t >> 7)) | (t * 3 & (t >> 10))` – Sierpinski-like texture
+    Sierpinski,
+    /// `t * (t >> 10 | t >> 8) & 63 & (t >> 4)` – arpeggiated melody
+    Melody,
+    /// `t | (t >> 3) | (t >> 5) | (t >> 7)` – rich harmonic drone
+    Harmony,
+    /// `t * (t >> 7 | t >> 14)` – acid bass texture
+    Acid,
+}
+
+impl BytebeatAlgo {
+    pub fn eval(self, t: u64) -> u8 {
+        match self {
+            BytebeatAlgo::Basic => (t & (t >> 8)) as u8,
+            BytebeatAlgo::Sierpinski => {
+                ((t.wrapping_mul(5) & (t >> 7)) | (t.wrapping_mul(3) & (t >> 10))) as u8
+            }
+            BytebeatAlgo::Melody => {
+                (t.wrapping_mul(t >> 10 | t >> 8) & 63 & (t >> 4)) as u8
+            }
+            BytebeatAlgo::Harmony => (t | (t >> 3) | (t >> 5) | (t >> 7)) as u8,
+            BytebeatAlgo::Acid => t.wrapping_mul(t >> 7 | t >> 14) as u8,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            BytebeatAlgo::Basic => "Basic",
+            BytebeatAlgo::Sierpinski => "Sierpinski",
+            BytebeatAlgo::Melody => "Melody",
+            BytebeatAlgo::Harmony => "Harmony",
+            BytebeatAlgo::Acid => "Acid",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ScaleMode {
     None,
