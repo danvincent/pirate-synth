@@ -16,6 +16,10 @@ pub const SCALE_NAMES: [&str; 9] = [
 
 pub const BANK_NAMES: [&str; 4] = ["A", "B", "C", "D"];
 
+/// Display names for the bytebeat algorithm options.
+/// Index 0 means "off" (no bytebeat).
+pub const BYTEBEAT_ALGO_NAMES: [&str; 6] = ["Off", "Basic", "Sierpinski", "Melody", "Harmony", "Acid"];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
     Up,
@@ -57,6 +61,7 @@ pub struct MenuState {
     pub granular_active: bool,
     pub osc_count: usize,
     pub gr_voices: usize,
+    pub bytebeat_algo_index: usize,
     pub video_status: VideoStatus,
     pub glide_progress: Option<f32>,
     pub selected_item: usize,
@@ -78,6 +83,7 @@ impl MenuState {
             granular_active: false,
             osc_count,
             gr_voices,
+            bytebeat_algo_index: 0,
             video_status: VideoStatus::Off,
             glide_progress: None,
             selected_item: 0,
@@ -90,7 +96,7 @@ impl MenuState {
     }
 
     pub fn total_items(&self) -> usize {
-        14
+        15
     }
 
     pub fn apply_button(&mut self, button: Button) {
@@ -133,6 +139,10 @@ impl MenuState {
             9 => self.fine_tune_cents = (self.fine_tune_cents + 1.0).min(100.0),
             10 => self.osc_count = (self.osc_count + 1).min(64),
             11 => self.gr_voices = (self.gr_voices + 1).min(64),
+            12 => {
+                self.bytebeat_algo_index =
+                    (self.bytebeat_algo_index + 1) % BYTEBEAT_ALGO_NAMES.len()
+            }
             _ => {}
         }
     }
@@ -169,6 +179,13 @@ impl MenuState {
             9 => self.fine_tune_cents = (self.fine_tune_cents - 1.0).max(-100.0),
             10 => self.osc_count = self.osc_count.saturating_sub(1).max(1),
             11 => self.gr_voices = self.gr_voices.saturating_sub(1),
+            12 => {
+                if self.bytebeat_algo_index == 0 {
+                    self.bytebeat_algo_index = BYTEBEAT_ALGO_NAMES.len() - 1;
+                } else {
+                    self.bytebeat_algo_index -= 1;
+                }
+            }
             _ => {}
         }
     }
@@ -193,6 +210,7 @@ impl MenuState {
             format!("Cents: {:+}", self.fine_tune_cents as i32),
             format!("WT Oscs: {}", self.osc_count),
             format!("GR Voices: {}", self.gr_voices),
+            format!("BB Algo: {}", BYTEBEAT_ALGO_NAMES[self.bytebeat_algo_index]),
             format!("Video: {}", self.video_status.as_str()),
             format!(
                 "Glide: {}",
@@ -219,8 +237,8 @@ mod tests {
     #[test]
     fn menu_has_fourteen_items() {
         let menu = MenuState::new(0.0, 8, 8);
-        assert_eq!(menu.total_items(), 14);
-        assert_eq!(menu.lines().len(), 14);
+        assert_eq!(menu.total_items(), 15);
+        assert_eq!(menu.lines().len(), 15);
     }
 
     #[test]
@@ -310,17 +328,21 @@ mod tests {
             "line 11 should start with GR Voices:"
         );
         assert!(
-            lines[12].starts_with("Video:"),
-            "line 12 should start with Video:"
+            lines[12].starts_with("BB Algo:"),
+            "line 12 should start with BB Algo:"
+        );
+        assert!(
+            lines[13].starts_with("Video:"),
+            "line 13 should start with Video:"
         );
     }
 
     #[test]
     fn menu_video_line_reports_state() {
         let mut menu = MenuState::new(0.0, 8, 8);
-        assert_eq!(menu.lines()[12], "Video: Off");
+        assert_eq!(menu.lines()[13], "Video: Off");
         menu.video_status = VideoStatus::On;
-        assert_eq!(menu.lines()[12], "Video: On");
+        assert_eq!(menu.lines()[13], "Video: On");
     }
 
     #[test]
@@ -342,7 +364,7 @@ mod tests {
     #[test]
     fn glide_item_is_read_only() {
         let mut menu = MenuState::new(0.0, 4, 2);
-        menu.selected_item = 13; // GLIDE item
+        menu.selected_item = 14; // GLIDE item
         let before = menu.lines();
         menu.apply_button(Button::Select);
         menu.apply_button(Button::Back);
@@ -352,9 +374,9 @@ mod tests {
     #[test]
     fn menu_total_items_is_14() {
         let mut menu = MenuState::new(0.0, 4, 2);
-        assert_eq!(menu.total_items(), 14);
+        assert_eq!(menu.total_items(), 15);
         menu.video_status = VideoStatus::NoHdmi;
-        assert_eq!(menu.lines()[12], "Video: No HDMI");
+        assert_eq!(menu.lines()[13], "Video: No HDMI");
     }
 
     #[test]
@@ -453,5 +475,47 @@ mod tests {
         assert_eq!(right_menu.lines(), select_menu.lines());
         assert_eq!(right_menu.selected_item, select_menu.selected_item);
         assert_eq!(right_menu.scroll_offset, select_menu.scroll_offset);
+    }
+
+    #[test]
+    fn bytebeat_algo_defaults_to_off() {
+        let menu = MenuState::new(0.0, 8, 8);
+        assert_eq!(menu.bytebeat_algo_index, 0);
+        assert!(menu.lines()[12].contains("Off"), "BB Algo should default to Off");
+    }
+
+    #[test]
+    fn bytebeat_algo_cycles_forward_and_wraps() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.selected_item = 12;
+        // advance through all options and back to Off
+        for _ in 0..BYTEBEAT_ALGO_NAMES.len() {
+            menu.apply_button(Button::Select);
+        }
+        assert_eq!(menu.bytebeat_algo_index, 0, "should wrap back to Off");
+    }
+
+    #[test]
+    fn bytebeat_algo_cycles_backward_and_wraps() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.selected_item = 12;
+        menu.apply_button(Button::Back);
+        assert_eq!(
+            menu.bytebeat_algo_index,
+            BYTEBEAT_ALGO_NAMES.len() - 1,
+            "backward from Off should wrap to last algo"
+        );
+    }
+
+    #[test]
+    fn bytebeat_algo_line_shows_selected_name() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.selected_item = 12;
+        menu.apply_button(Button::Select); // index 1 = Basic
+        let lines = menu.lines();
+        assert!(
+            lines[12].contains("Basic"),
+            "line 12 should show the selected algo name"
+        );
     }
 }

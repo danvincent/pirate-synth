@@ -5,7 +5,9 @@ mod wav;
 mod wavetable;
 
 // Public API re-exports
-pub use types::{EngineError, GranularConfig, GranularSource, ScaleMode, SourceKind, Wavetable};
+pub use types::{
+    BytebeatAlgo, EngineError, GranularConfig, GranularSource, ScaleMode, SourceKind, Wavetable,
+};
 pub use wav::load_wav_sources;
 pub use wavetable::{builtin_wavetables, default_sine_wavetable, load_wavetables};
 
@@ -144,6 +146,10 @@ pub struct Engine {
     bank_ramp_rate: f32,
     source_kind: SourceKind,
     granular: Option<GranularState>,
+    // Bytebeat synthesis
+    bytebeat_algo: Option<BytebeatAlgo>,
+    bytebeat_t: f64,
+    bytebeat_volume: f32,
 }
 
 impl Engine {
@@ -246,6 +252,9 @@ impl Engine {
             bank_ramp_rate: 1.0 / (3.0 * sample_rate as f32),
             source_kind: SourceKind::Wavetable,
             granular: None,
+            bytebeat_algo: None,
+            bytebeat_t: 0.0,
+            bytebeat_volume: 1.0,
         };
 
         engine.set_stereo_spread(0);
@@ -549,8 +558,21 @@ impl Engine {
         }
     }
 
-    fn refresh_granular_channel_assignments(&mut self) {
-        if let Some(granular) = self.granular.as_mut() {
+    /// Select the bytebeat algorithm to mix in. Pass `None` to disable bytebeat.
+    pub fn set_bytebeat_algo(&mut self, algo: Option<BytebeatAlgo>) {
+        if self.bytebeat_algo.is_none() && algo.is_some() {
+            // Reset counter when first enabling so every activation starts from t=0.
+            self.bytebeat_t = 0.0;
+        }
+        self.bytebeat_algo = algo;
+    }
+
+    /// Set bytebeat mix volume instantly (0–100 maps to 0.0–1.0).
+    pub fn set_bytebeat_volume(&mut self, level: u8) {
+        self.bytebeat_volume = (level.min(100) as f32) / 100.0;
+    }
+
+    fn refresh_granular_channel_assignments(&mut self) {        if let Some(granular) = self.granular.as_mut() {
             let n_sources = granular.configured_wavs.max(1).min(granular.sources.len());
             let config = granular.config;
             let seed = lcg_next(&mut self.rng_state) as u64;
@@ -943,9 +965,18 @@ impl Engine {
                 l += processed_l * self.granular_gain * self.granular_volume;
                 r += processed_r * self.granular_gain * self.granular_volume;
             }
-            let l = l.clamp(-1.0, 1.0);
-            let r = r.clamp(-1.0, 1.0);
-            frame[0] = (l * i16::MAX as f32) as i16;
+            // Mix in bytebeat if active.
+            // The counter advances at 8 kHz regardless of the actual sample rate.
+            let bb_sample = if let Some(algo) = self.bytebeat_algo {
+                let t = self.bytebeat_t as u64;
+                let byte = algo.eval(t) as i8;
+                self.bytebeat_t += 8_000.0 / self.sample_rate as f64;
+                (byte as f32 / 128.0) * self.bytebeat_volume * 0.5
+            } else {
+                0.0
+            };
+            let l = (l + bb_sample).clamp(-1.0, 1.0);
+            let r = (r + bb_sample).clamp(-1.0, 1.0);            frame[0] = (l * i16::MAX as f32) as i16;
             frame[1] = (r * i16::MAX as f32) as i16;
         }
     }
@@ -3437,5 +3468,104 @@ mod tests {
             engine.granular.as_ref().unwrap().active_grains.is_empty(),
             "active_grains must be cleared when set_granular_wavs(0) is called"
         );
+    }
+
+    // ── Bytebeat tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn bytebeat_disabled_by_default_produces_no_extra_output() {
+        let wavetables = vec![default_sine_wavetable()];
+        let mut engine = Engine::new(48_000, 1, wavetables).unwrap();
+        // oscillators silent; bytebeat off → all frames should be zero
+        engine.set_oscillators_active_immediate(false);
+        let mut buf = vec![0i16; 4];
+        engine.render_i16_stereo(&mut buf);
+        assert!(buf.iter().all(|&s| s == 0), "silent engine must produce zeros");
+    }
+
+    #[test]
+    fn bytebeat_set_algo_some_produces_nonzero_output() {
+        let wavetables = vec![default_sine_wavetable()];
+        let mut engine = Engine::new(48_000, 1, wavetables).unwrap();
+        engine.set_oscillators_active_immediate(false);
+        // Harmony = t | (t>>3) | (t>>5) | (t>>7), non-zero for t >= 1
+        engine.set_bytebeat_algo(Some(BytebeatAlgo::Harmony));
+        // Advance enough samples so the 8 kHz counter reaches t = 1 (6 samples at 48 kHz)
+        let mut buf = vec![0i16; 512];
+        engine.render_i16_stereo(&mut buf);
+        let nonzero = buf.iter().any(|&s| s != 0);
+        assert!(nonzero, "bytebeat Harmony should produce some non-zero samples");
+    }
+
+    #[test]
+    fn bytebeat_set_algo_none_silences_bytebeat() {
+        let wavetables = vec![default_sine_wavetable()];
+        let mut engine = Engine::new(48_000, 1, wavetables).unwrap();
+        engine.set_oscillators_active_immediate(false);
+        engine.set_bytebeat_algo(Some(BytebeatAlgo::Sierpinski));
+        // Disable bytebeat
+        engine.set_bytebeat_algo(None);
+        let mut buf = vec![0i16; 256];
+        engine.render_i16_stereo(&mut buf);
+        assert!(buf.iter().all(|&s| s == 0), "disabled bytebeat must produce zeros");
+    }
+
+    #[test]
+    fn bytebeat_all_algos_compile_and_produce_output() {
+        let algos = [
+            BytebeatAlgo::Basic,
+            BytebeatAlgo::Sierpinski,
+            BytebeatAlgo::Melody,
+            BytebeatAlgo::Harmony,
+            BytebeatAlgo::Acid,
+        ];
+        for algo in algos {
+            let wavetables = vec![default_sine_wavetable()];
+            let mut engine = Engine::new(48_000, 1, wavetables).unwrap();
+            engine.set_oscillators_active_immediate(false);
+            engine.set_bytebeat_algo(Some(algo));
+            let mut buf = vec![0i16; 512];
+            // Advance a few frames to move past t=0
+            for _ in 0..4 {
+                engine.render_i16_stereo(&mut buf);
+            }
+            // Each algo must return a recognisable name
+            assert!(!algo.name().is_empty(), "{algo:?} name must be non-empty");
+        }
+    }
+
+    #[test]
+    fn bytebeat_volume_zero_produces_no_output() {
+        let wavetables = vec![default_sine_wavetable()];
+        let mut engine = Engine::new(48_000, 1, wavetables).unwrap();
+        engine.set_oscillators_active_immediate(false);
+        engine.set_bytebeat_algo(Some(BytebeatAlgo::Harmony));
+        engine.set_bytebeat_volume(0);
+        let mut buf = vec![0i16; 512];
+        engine.render_i16_stereo(&mut buf);
+        assert!(
+            buf.iter().all(|&s| s == 0),
+            "bytebeat volume 0 must produce silent output"
+        );
+    }
+
+    #[test]
+    fn bytebeat_counter_resets_on_re_enable() {
+        let wavetables = vec![default_sine_wavetable()];
+        let mut engine = Engine::new(48_000, 1, wavetables).unwrap();
+        engine.set_oscillators_active_immediate(false);
+
+        // First activation: capture output
+        engine.set_bytebeat_algo(Some(BytebeatAlgo::Basic));
+        let mut buf1 = vec![0i16; 128];
+        engine.render_i16_stereo(&mut buf1);
+
+        // Disable then re-enable: counter should reset → same output as first run
+        engine.set_bytebeat_algo(None);
+        engine.set_bytebeat_algo(Some(BytebeatAlgo::Basic));
+        let mut buf2 = vec![0i16; 128];
+        engine.render_i16_stereo(&mut buf2);
+
+        assert_eq!(buf1, buf2, "re-enabling bytebeat should restart from t=0");
     }
 }
