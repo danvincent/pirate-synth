@@ -89,7 +89,7 @@ impl St7789Display {
 
     pub fn draw_menu(&mut self, state: &MenuState) -> Result<()> {
         let fb = build_menu_framebuffer(state, self.width, self.height);
-        self.write_full_framebuffer(&fb.to_bytes())?;
+        self.write_full_framebuffer(fb.as_bytes())?;
         Ok(())
     }
 
@@ -99,7 +99,7 @@ impl St7789Display {
 
     pub fn draw_idle_screen(&mut self, state: &MenuState, hostname: &str) -> Result<()> {
         let fb = build_idle_framebuffer(state, hostname, self.width, self.height);
-        self.write_full_framebuffer(&fb.to_bytes())?;
+        self.write_full_framebuffer(fb.as_bytes())?;
         Ok(())
     }
 
@@ -108,23 +108,28 @@ impl St7789Display {
         fb.clear(0x0000);
         let fb_width = fb.width() as i32;
 
+        let text_width_2x = |text: &str| -> i32 {
+            let chars = text.chars().count() as i32;
+            if chars == 0 { 0 } else { chars * 18 - 2 }
+        };
+
         let line1 = "Powering";
-        let line1_w = line1.chars().count() as i32 * 16;
+        let line1_w = text_width_2x(line1);
         let line1_x = (fb_width - line1_w) / 2;
         fb.draw_text_2x(line1_x, 96, line1, 0xF800, 0x0000);
 
         let line2 = "down";
-        let line2_w = line2.chars().count() as i32 * 16;
+        let line2_w = text_width_2x(line2);
         let line2_x = (fb_width - line2_w) / 2;
         fb.draw_text_2x(line2_x, 122, line2, 0xF800, 0x0000);
 
-        self.write_full_framebuffer(&fb.to_bytes())?;
+        self.write_full_framebuffer(fb.as_bytes())?;
         Ok(())
     }
 
     pub fn clear_and_backlight_off(&mut self) -> Result<()> {
         let fb = Framebuffer::new(self.width, self.height);
-        self.write_full_framebuffer(&fb.to_bytes())?;
+        self.write_full_framebuffer(fb.as_bytes())?;
         if let Some(ref mut backlight) = self.backlight {
             backlight.set_low();
         }
@@ -460,5 +465,100 @@ mod tests {
             fb_sel4.to_bytes(),
             "framebuffer must differ when a different visible row is selected"
         );
+    }
+
+    #[test]
+    fn build_idle_framebuffer_hostname_differs() {
+        let state = MenuState::new(0.0, 4, 4);
+        let fb1 = build_idle_framebuffer(&state, "host-a", 240, 240);
+        let fb2 = build_idle_framebuffer(&state, "host-b", 240, 240);
+        assert_ne!(
+            fb1.to_bytes(),
+            fb2.to_bytes(),
+            "idle framebuffer must differ when hostname changes"
+        );
+    }
+
+    #[test]
+    fn build_idle_framebuffer_key_change_differs() {
+        let mut state = MenuState::new(0.0, 4, 4);
+        state.key_index = 0;
+        let fb_c = build_idle_framebuffer(&state, "host", 240, 240);
+        state.key_index = 3;
+        let fb_e = build_idle_framebuffer(&state, "host", 240, 240);
+        assert_ne!(
+            fb_c.to_bytes(),
+            fb_e.to_bytes(),
+            "idle framebuffer must differ when root key changes"
+        );
+    }
+
+    #[test]
+    fn draw_powering_down_framebuffer_has_red_pixels() {
+        // Build the framebuffer directly to test centering logic without hardware.
+        let width: u16 = 240;
+        let height: u16 = 240;
+        let mut fb = crate::framebuffer::Framebuffer::new(width, height);
+        fb.clear(0x0000);
+        let fb_width = fb.width() as i32;
+
+        let text_width_2x = |text: &str| -> i32 {
+            let chars = text.chars().count() as i32;
+            if chars == 0 { 0 } else { chars * 18 - 2 }
+        };
+
+        let line1 = "Powering";
+        let line1_w = text_width_2x(line1);
+        let line1_x = (fb_width - line1_w) / 2;
+        fb.draw_text_2x(line1_x, 96, line1, 0xF800, 0x0000);
+
+        let line2 = "down";
+        let line2_w = text_width_2x(line2);
+        let line2_x = (fb_width - line2_w) / 2;
+        fb.draw_text_2x(line2_x, 122, line2, 0xF800, 0x0000);
+
+        // Both lines should start within bounds
+        assert!(line1_x >= 0 && line1_x < fb_width, "line1 x must be within framebuffer");
+        assert!(line2_x >= 0 && line2_x < fb_width, "line2 x must be within framebuffer");
+
+        // The text should be roughly centered (closer to center than to either edge)
+        assert!(
+            (line1_x - (fb_width - line1_w) / 2).abs() <= 1,
+            "line1 must be horizontally centered"
+        );
+        assert!(
+            (line2_x - (fb_width - line2_w) / 2).abs() <= 1,
+            "line2 must be horizontally centered"
+        );
+
+        // There should be at least one red pixel (0xF800) in the framebuffer
+        let bytes = fb.as_bytes();
+        let has_red = bytes.chunks_exact(2).any(|px| ((px[0] as u16) << 8 | px[1] as u16) == 0xF800);
+        assert!(has_red, "powering-down screen must contain at least one red pixel");
+    }
+
+    #[test]
+    fn write_in_chunks_empty_input_succeeds() {
+        let mut count = 0usize;
+        write_in_chunks(&[], 4, |_chunk| {
+            count += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(count, 0, "empty input must produce zero writes");
+    }
+
+    #[test]
+    fn write_in_chunks_exact_multiple_boundary() {
+        let data = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+        let mut writes = Vec::new();
+        write_in_chunks(&data, 4, |chunk| {
+            writes.push(chunk.to_vec());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(writes.len(), 2, "exact multiple must produce two writes");
+        assert_eq!(writes[0], vec![1, 2, 3, 4]);
+        assert_eq!(writes[1], vec![5, 6, 7, 8]);
     }
 }

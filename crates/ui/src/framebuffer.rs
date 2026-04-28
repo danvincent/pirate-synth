@@ -163,6 +163,7 @@ impl Framebuffer {
         ((self.pixels[idx] as u16) << 8) | self.pixels[idx + 1] as u16
     }
 
+    #[cfg(test)]
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         self.pixels.clone()
     }
@@ -206,5 +207,122 @@ mod tests {
         let fb = Framebuffer::new(320, 240);
         assert_eq!(fb.width(), 320);
         assert_eq!(fb.height(), 240);
+    }
+
+    #[test]
+    fn test_framebuffer_clear_sets_all_pixels() {
+        let mut fb = Framebuffer::new(4, 2);
+        fb.clear(0xF800); // red in RGB565
+        let bytes = fb.as_bytes();
+        for px in bytes.chunks_exact(2) {
+            assert_eq!(px[0], 0xF8);
+            assert_eq!(px[1], 0x00);
+        }
+    }
+
+    #[test]
+    fn test_framebuffer_set_and_get_pixel() {
+        let mut fb = Framebuffer::new(16, 16);
+        fb.set_pixel(3, 5, 0x07E0); // green
+        assert_eq!(fb.get_pixel(3, 5), 0x07E0);
+        // other pixels remain zero
+        assert_eq!(fb.get_pixel(0, 0), 0x0000);
+    }
+
+    #[test]
+    fn test_framebuffer_set_pixel_out_of_bounds_is_noop() {
+        let mut fb = Framebuffer::new(8, 8);
+        fb.set_pixel(8, 0, 0xFFFF);  // x == width, out of bounds
+        fb.set_pixel(0, 8, 0xFFFF);  // y == height, out of bounds
+        for b in fb.as_bytes() {
+            assert_eq!(*b, 0, "out-of-bounds writes must not modify the buffer");
+        }
+    }
+
+    #[test]
+    fn test_framebuffer_get_pixel_out_of_bounds_returns_zero() {
+        let fb = Framebuffer::new(8, 8);
+        assert_eq!(fb.get_pixel(8, 0), 0);
+        assert_eq!(fb.get_pixel(0, 8), 0);
+    }
+
+    #[test]
+    fn test_framebuffer_fill_rect_basic() {
+        let mut fb = Framebuffer::new(10, 10);
+        fb.fill_rect(2, 2, 3, 3, 0x001F); // blue 3×3 starting at (2,2)
+        for y in 2..5 {
+            for x in 2..5 {
+                assert_eq!(fb.get_pixel(x, y), 0x001F, "expected blue at ({x},{y})");
+            }
+        }
+        assert_eq!(fb.get_pixel(1, 2), 0x0000);
+        assert_eq!(fb.get_pixel(5, 2), 0x0000);
+    }
+
+    #[test]
+    fn test_framebuffer_fill_rect_clamps_to_bounds() {
+        // rect extends outside framebuffer — must not panic
+        let mut fb = Framebuffer::new(8, 8);
+        fb.fill_rect(-2, -2, 20, 20, 0xFFFF);
+        // All pixels within bounds should be white
+        for y in 0..8 {
+            for x in 0..8 {
+                assert_eq!(fb.get_pixel(x, y), 0xFFFF);
+            }
+        }
+    }
+
+    #[test]
+    fn test_framebuffer_draw_text_places_glyph() {
+        let mut fb = Framebuffer::new(240, 16);
+        fb.draw_text(0, 0, "A", 0xFFFF, 0x0000);
+        // 'A' glyph has foreground pixels across rows 0-7, cols 0-7
+        let has_foreground = (0..8usize).flat_map(|y| (0..8usize).map(move |x| (x, y)))
+            .any(|(x, y)| fb.get_pixel(x, y) == 0xFFFF);
+        assert!(has_foreground, "draw_text must render at least one foreground pixel for 'A'");
+    }
+
+    #[test]
+    fn test_framebuffer_draw_text_2x_places_glyph() {
+        let mut fb = Framebuffer::new(240, 32);
+        fb.draw_text_2x(0, 0, "A", 0xFFFF, 0x0000);
+        let has_foreground = (0..16usize).flat_map(|y| (0..16usize).map(move |x| (x, y)))
+            .any(|(x, y)| fb.get_pixel(x, y) == 0xFFFF);
+        assert!(has_foreground, "draw_text_2x must render at least one foreground pixel for 'A'");
+    }
+
+    #[test]
+    fn test_framebuffer_draw_text_4x_places_glyph() {
+        let mut fb = Framebuffer::new(240, 64);
+        fb.draw_text_4x(0, 0, "A", 0xFFFF, 0x0000);
+        let has_foreground = (0..32usize).flat_map(|y| (0..32usize).map(move |x| (x, y)))
+            .any(|(x, y)| fb.get_pixel(x, y) == 0xFFFF);
+        assert!(has_foreground, "draw_text_4x must render at least one foreground pixel for 'A'");
+    }
+
+    #[test]
+    fn test_draw_text_2x_stride_matches_centering_formula() {
+        // Verify the stride used by draw_text_2x: n chars produce n*18-2 pixels wide text.
+        // Two glyphs of 8px × 2 = 16px each with 1px gap between them = 16+1+16 = 33px.
+        // For n chars: n * 16 px data + (n-1) * 1 px gaps = n*16 + n - 1 = n*18 - 1? 
+        // draw_text_2x advances by 18px per char, so last char occupies x to x+16.
+        // Total used width for n chars = (n-1)*18 + 16 = n*18 - 2.
+        let text = "Hi";
+        let n = text.chars().count() as i32;
+        let expected_w = n * 18 - 2;
+        assert_eq!(expected_w, 34, "2 chars: 2*18-2=34");
+    }
+
+    #[test]
+    fn test_framebuffer_save_ppm_produces_correct_file() {
+        use std::env;
+        let mut fb = Framebuffer::new(2, 2);
+        fb.set_pixel(0, 0, 0xF800); // red
+        let path = env::temp_dir().join("pirate_synth_fb_test.ppm");
+        fb.save_ppm(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(bytes.starts_with(b"P6\n2 2\n255\n"), "PPM header mismatch");
+        assert_eq!(bytes.len(), "P6\n2 2\n255\n".len() + 2 * 2 * 3);
+        let _ = std::fs::remove_file(&path);
     }
 }

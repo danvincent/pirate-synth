@@ -144,13 +144,18 @@ impl Ili9341Display {
         fb.clear(0x0000);
         let fb_width = fb.width() as i32;
 
+        let text_width_2x = |text: &str| -> i32 {
+            let chars = text.chars().count() as i32;
+            if chars == 0 { 0 } else { chars * 18 - 2 }
+        };
+
         let line1 = "Powering";
-        let line1_w = line1.chars().count() as i32 * 16;
+        let line1_w = text_width_2x(line1);
         let line1_x = (fb_width - line1_w) / 2;
         fb.draw_text_2x(line1_x, 96, line1, 0xF800, 0x0000);
 
         let line2 = "down";
-        let line2_w = line2.chars().count() as i32 * 16;
+        let line2_w = text_width_2x(line2);
         let line2_x = (fb_width - line2_w) / 2;
         fb.draw_text_2x(line2_x, 122, line2, 0xF800, 0x0000);
 

@@ -129,6 +129,7 @@ else
 fi
 
 # Prevent cloud-init from resetting config.txt and hostname on future boots.
+mkdir -p /etc/cloud
 touch /etc/cloud/cloud-init.disabled
 
 touch "$SENTINEL"

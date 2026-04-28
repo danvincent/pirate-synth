@@ -42,8 +42,8 @@ struct AppConfig {
     wavetable_dir: PathBuf,
     #[serde(default = "default_wav_dir")]
     wav_dir: PathBuf,
-    #[serde(default = "default_spi_device")]
-    spi_device: String,
+    #[serde(default)]
+    spi_device: Option<String>,
     #[serde(default = "default_hardware_profile")]
     hardware_profile: String,
     #[serde(default)]
@@ -175,9 +175,6 @@ fn default_wavetable_dir() -> PathBuf {
 }
 fn default_wav_dir() -> PathBuf {
     PathBuf::from("/var/lib/pirate-synth/WAV")
-}
-fn default_spi_device() -> String {
-    "/dev/spidev0.1".into()
 }
 fn default_hardware_profile() -> String {
     "pirate-audio".into()
@@ -317,7 +314,7 @@ impl Default for AppConfig {
             stereo_spread: default_stereo_spread(),
             wavetable_dir: default_wavetable_dir(),
             wav_dir: default_wav_dir(),
-            spi_device: default_spi_device(),
+            spi_device: None,
             hardware_profile: default_hardware_profile(),
             dc_pin_override: None,
             backlight_pin_override: None,
@@ -475,7 +472,7 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         stereo_spread: user.stereo_spread.unwrap_or(base.stereo_spread),
         wavetable_dir: user.wavetable_dir.unwrap_or(base.wavetable_dir),
         wav_dir: user.wav_dir.unwrap_or(base.wav_dir),
-        spi_device: user.spi_device.unwrap_or(base.spi_device),
+        spi_device: user.spi_device.or(base.spi_device),
         hardware_profile: user.hardware_profile.unwrap_or(base.hardware_profile),
         dc_pin_override: user.dc_pin_override.or(base.dc_pin_override),
         backlight_pin_override: user.backlight_pin_override.or(base.backlight_pin_override),
@@ -720,11 +717,10 @@ impl HardwareProfile {
 }
 
 fn resolve_spi_device(profile: &HardwareProfile, config: &AppConfig) -> String {
-    if config.spi_device != default_spi_device() {
-        config.spi_device.clone()
-    } else {
-        profile.default_spi_device().to_string()
-    }
+    config
+        .spi_device
+        .clone()
+        .unwrap_or_else(|| profile.default_spi_device().to_string())
 }
 
 fn resolve_dc_pin(profile: &HardwareProfile, config: &AppConfig) -> u8 {
@@ -995,10 +991,20 @@ fn main() -> Result<()> {
         config.wavetable_dir.display(),
         config.wav_dir.display(),
         config.hardware_profile,
-        config.spi_device
+        config.spi_device.as_deref().unwrap_or("(profile default)")
     );
 
-    let mut hardware = build_hardware(&config)?;
+    let HardwareBuild {
+        profile: hw_profile,
+        display: hw_display,
+        button_config: hw_button_config,
+        alsa_device: hw_alsa_device,
+        spi_device: hw_spi_device,
+        dc_pin: hw_dc_pin,
+        backlight_pin: hw_backlight_pin,
+        power_latch: _power_latch,
+        joystick_reader: mut hw_joystick_reader,
+    } = build_hardware(&config)?;
 
     let initial_bank = ui::BANK_NAMES
         .get(config.bank_index)
@@ -1083,14 +1089,14 @@ fn main() -> Result<()> {
         AudioConfig {
             sample_rate: config.sample_rate,
             buffer_frames: config.buffer_frames,
-            device: hardware.alsa_device.clone(),
+            device: hw_alsa_device.clone(),
         },
         audio_rx,
         visuals_level_tx,
     );
 
     info!("initializing button GPIO inputs");
-    let mut buttons = ButtonReader::new(hardware.button_config)
+    let mut buttons = ButtonReader::new(hw_button_config)
         .context("failed to configure hardware button mapping")?;
     info!("button GPIO inputs initialized");
     let midi = match initialize_midi() {
@@ -1103,12 +1109,12 @@ fn main() -> Result<()> {
 
     info!(
         "initializing {:?} display over {}",
-        hardware.profile, hardware.spi_device
+        hw_profile, hw_spi_device
     );
-    let mut display = hardware.display;
+    let mut display = hw_display;
     info!(
         "display initialized (DC=BCM{}, backlight={:?})",
-        hardware.dc_pin, hardware.backlight_pin
+        hw_dc_pin, hw_backlight_pin
     );
 
     info!("rendering initial menu frame");
@@ -1124,12 +1130,13 @@ fn main() -> Result<()> {
     let mut idle_mode = false;
     const SHUTDOWN_HOLD_DURATION: Duration = Duration::from_secs(5);
     let mut shutdown_combo_start: Option<Instant> = None;
+    let mut raw_buf: Vec<bool> = Vec::with_capacity(4);
 
     loop {
         // Shutdown combo: Up + Down held together for 5 seconds triggers a safe shutdown.
         // Checked before the idle logic so the combo is not interrupted by the idle screen.
-        let raw = buttons.raw_states();
-        if raw.len() >= 2 && raw[0] && raw[1] {
+        buttons.raw_states_into(&mut raw_buf);
+        if raw_buf.len() >= 2 && raw_buf[0] && raw_buf[1] {
             last_activity = Instant::now();
             match shutdown_combo_start {
                 None => shutdown_combo_start = Some(Instant::now()),
@@ -1216,8 +1223,7 @@ fn main() -> Result<()> {
             }
         }
 
-        let joystick_button = hardware
-            .joystick_reader
+        let joystick_button = hw_joystick_reader
             .as_mut()
             .and_then(|jr| jr.poll_pressed());
         let button_press = buttons.poll_pressed()?.or(joystick_button);
@@ -1509,5 +1515,160 @@ mod tests {
             resolve_spi_device(&profile, &override_cfg),
             "/dev/spidev1.0".to_string()
         );
+    }
+
+    #[test]
+    fn test_spi_device_gpi_case_default() {
+        let profile = HardwareProfile::GpiCase;
+        let cfg: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(
+            resolve_spi_device(&profile, &cfg),
+            "/dev/spidev0.0".to_string()
+        );
+    }
+
+    #[test]
+    fn test_spi_device_explicit_pirate_audio_default_respected_for_gpi_case() {
+        // With the new Option<String> approach, explicitly setting spi_device to the
+        // pirate-audio global default "/dev/spidev0.1" is honoured even for GpiCase.
+        let profile = HardwareProfile::GpiCase;
+        let cfg: AppConfig = toml::from_str("spi_device = \"/dev/spidev0.1\"\n").unwrap();
+        assert_eq!(
+            resolve_spi_device(&profile, &cfg),
+            "/dev/spidev0.1".to_string(),
+            "explicit spi_device override must be respected regardless of profile"
+        );
+    }
+
+    #[test]
+    fn test_spi_device_none_in_default_config() {
+        let cfg = AppConfig::default();
+        assert!(cfg.spi_device.is_none(), "default AppConfig must have spi_device = None");
+    }
+
+    #[test]
+    fn test_hardware_profile_default_spi_device() {
+        assert_eq!(HardwareProfile::PirateAudio.default_spi_device(), "/dev/spidev0.1");
+        assert_eq!(HardwareProfile::GpiCase.default_spi_device(), "/dev/spidev0.0");
+    }
+
+    #[test]
+    fn test_hardware_profile_default_dc_pin() {
+        assert_eq!(resolve_dc_pin(&HardwareProfile::PirateAudio, &AppConfig::default()), 9);
+        assert_eq!(resolve_dc_pin(&HardwareProfile::GpiCase, &AppConfig::default()), 25);
+    }
+
+    #[test]
+    fn test_hardware_profile_dc_pin_override() {
+        let mut cfg = AppConfig::default();
+        cfg.dc_pin_override = Some(12);
+        assert_eq!(resolve_dc_pin(&HardwareProfile::PirateAudio, &cfg), 12);
+        assert_eq!(resolve_dc_pin(&HardwareProfile::GpiCase, &cfg), 12);
+    }
+
+    #[test]
+    fn test_hardware_profile_backlight_pin() {
+        assert_eq!(
+            resolve_backlight_pin(&HardwareProfile::PirateAudio, &AppConfig::default()),
+            Some(13)
+        );
+        assert_eq!(
+            resolve_backlight_pin(&HardwareProfile::GpiCase, &AppConfig::default()),
+            None
+        );
+    }
+
+    #[test]
+    fn test_hardware_profile_backlight_pin_override() {
+        let mut cfg = AppConfig::default();
+        cfg.backlight_pin_override = Some(22);
+        assert_eq!(resolve_backlight_pin(&HardwareProfile::PirateAudio, &cfg), Some(22));
+        assert_eq!(resolve_backlight_pin(&HardwareProfile::GpiCase, &cfg), Some(22));
+    }
+
+    #[test]
+    fn test_scale_mode_from_index_covers_all_variants() {
+        use engine::ScaleMode;
+        assert!(matches!(scale_mode_from_index(0), ScaleMode::None));
+        assert!(matches!(scale_mode_from_index(1), ScaleMode::Major));
+        assert!(matches!(scale_mode_from_index(2), ScaleMode::NaturalMinor));
+        assert!(matches!(scale_mode_from_index(3), ScaleMode::Pentatonic));
+        assert!(matches!(scale_mode_from_index(4), ScaleMode::Dorian));
+        assert!(matches!(scale_mode_from_index(5), ScaleMode::Mixolydian));
+        assert!(matches!(scale_mode_from_index(6), ScaleMode::WholeTone));
+        assert!(matches!(scale_mode_from_index(7), ScaleMode::Hirajoshi));
+        assert!(matches!(scale_mode_from_index(8), ScaleMode::Lydian));
+        // out-of-range falls back to None
+        assert!(matches!(scale_mode_from_index(99), ScaleMode::None));
+    }
+
+    #[test]
+    fn test_midi_note_to_menu_key_octave_boundary_cases() {
+        // Note 0 = C-1, clamped octave to 0
+        let (key, oct) = midi_note_to_menu_key_octave(0);
+        assert_eq!(key, 0);
+        assert_eq!(oct, 0);
+        // Note 127 = G9, octave clamped to 8
+        let (key, oct) = midi_note_to_menu_key_octave(127);
+        assert_eq!(key, 7);
+        assert_eq!(oct, 8);
+        // Middle C = note 60 = C4
+        let (key, oct) = midi_note_to_menu_key_octave(60);
+        assert_eq!(key, 0); // C
+        assert_eq!(oct, 4);
+    }
+
+    #[test]
+    fn test_parse_midi_event_note_off_ignored() {
+        // velocity 0 on note-on is treated as note-off; must return None
+        assert_eq!(parse_midi_event(&[0x90, 64, 0]), None);
+    }
+
+    #[test]
+    fn test_parse_midi_event_short_message_returns_none() {
+        assert_eq!(parse_midi_event(&[0x90, 64]), None);
+        assert_eq!(parse_midi_event(&[]), None);
+    }
+
+    #[test]
+    fn test_parse_midi_event_channel_mask_applied() {
+        // status byte 0x9F = note-on on channel 15; should still decode
+        assert_eq!(parse_midi_event(&[0x9F, 60, 80]), Some(MidiEvent::NoteOn(60)));
+    }
+
+    #[test]
+    fn test_granular_config_clamping() {
+        let mut cfg = AppConfig::default();
+        cfg.granular_channels = 0; // below minimum 1
+        cfg.granular_pitch_cents = -9999.0; // below minimum -2400
+        cfg.granular_position = 2.0; // above maximum 1.0
+        let gc = granular_config(&cfg);
+        assert_eq!(gc.granular_channels, 1, "granular_channels must be clamped to 1");
+        assert!(gc.granular_pitch_cents >= -2400.0, "pitch_cents must be clamped");
+        assert!(gc.position <= 1.0, "position must be clamped");
+    }
+
+    #[test]
+    fn test_apply_user_config_spi_device_override() {
+        let base = AppConfig::default();
+        assert!(base.spi_device.is_none());
+        let user = UserConfig {
+            spi_device: Some("/dev/spidev1.0".into()),
+            ..UserConfig::default()
+        };
+        let merged = apply_user_config(base, user);
+        assert_eq!(merged.spi_device.as_deref(), Some("/dev/spidev1.0"));
+    }
+
+    #[test]
+    fn test_apply_user_config_spi_device_none_preserves_base() {
+        let mut base = AppConfig::default();
+        base.spi_device = Some("/dev/spidev0.0".into());
+        let user = UserConfig {
+            spi_device: None,
+            ..UserConfig::default()
+        };
+        let merged = apply_user_config(base, user);
+        assert_eq!(merged.spi_device.as_deref(), Some("/dev/spidev0.0"));
     }
 }

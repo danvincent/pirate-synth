@@ -103,7 +103,7 @@ Note: A/B/X/Y/Start/Select buttons are not used.
 
 ## What first boot does
 
-`pirate-synth-firstboot.service` runs `/boot/firmware/pirate-synth/install.sh` once and then writes sentinel file `/var/lib/pirate-synth/firstboot.done`.
+`pirate-synth-firstboot.service` runs the appropriate hardware-specific installer once on first boot — typically `/boot/firmware/pirate-synth/install.sh`, or `/boot/firmware/pirate-synth/install-gpi.sh` for the GPi bundle — and then writes sentinel file `/var/lib/pirate-synth/firstboot.done`.
 
 Installer actions:
 
