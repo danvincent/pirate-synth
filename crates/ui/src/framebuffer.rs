@@ -163,11 +163,6 @@ impl Framebuffer {
         ((self.pixels[idx] as u16) << 8) | self.pixels[idx + 1] as u16
     }
 
-    #[cfg(test)]
-    pub(crate) fn to_bytes(&self) -> Vec<u8> {
-        self.pixels.clone()
-    }
-
     pub(crate) fn save_ppm(&self, path: &Path) -> Result<()> {
         let mut out = Vec::with_capacity(self.pixels.len() / 2 * 3 + 32);
         out.extend_from_slice(format!("P6\n{} {}\n255\n", self.width, self.height).as_bytes());

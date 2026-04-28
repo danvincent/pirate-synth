@@ -414,8 +414,8 @@ mod tests {
 
         // The WT header region should differ between active/inactive oscillators
         assert_ne!(
-            fb_on.to_bytes(),
-            fb_off.to_bytes(),
+            fb_on.as_bytes(),
+            fb_off.as_bytes(),
             "framebuffer must reflect oscillator active state"
         );
     }
@@ -440,8 +440,8 @@ mod tests {
         let fb_inactive = build_idle_framebuffer(&state, "host", 240, 240);
 
         assert_ne!(
-            fb_active.to_bytes(),
-            fb_inactive.to_bytes(),
+            fb_active.as_bytes(),
+            fb_inactive.as_bytes(),
             "idle framebuffer must differ when granular_active changes"
         );
     }
@@ -461,8 +461,8 @@ mod tests {
         let fb_sel4 = build_menu_framebuffer(&state, 240, 240);
 
         assert_ne!(
-            fb_sel5.to_bytes(),
-            fb_sel4.to_bytes(),
+            fb_sel5.as_bytes(),
+            fb_sel4.as_bytes(),
             "framebuffer must differ when a different visible row is selected"
         );
     }
@@ -473,8 +473,8 @@ mod tests {
         let fb1 = build_idle_framebuffer(&state, "host-a", 240, 240);
         let fb2 = build_idle_framebuffer(&state, "host-b", 240, 240);
         assert_ne!(
-            fb1.to_bytes(),
-            fb2.to_bytes(),
+            fb1.as_bytes(),
+            fb2.as_bytes(),
             "idle framebuffer must differ when hostname changes"
         );
     }
@@ -487,8 +487,8 @@ mod tests {
         state.key_index = 3;
         let fb_e = build_idle_framebuffer(&state, "host", 240, 240);
         assert_ne!(
-            fb_c.to_bytes(),
-            fb_e.to_bytes(),
+            fb_c.as_bytes(),
+            fb_e.as_bytes(),
             "idle framebuffer must differ when root key changes"
         );
     }
