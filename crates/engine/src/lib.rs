@@ -572,7 +572,8 @@ impl Engine {
         self.bytebeat_volume = (level.min(100) as f32) / 100.0;
     }
 
-    fn refresh_granular_channel_assignments(&mut self) {        if let Some(granular) = self.granular.as_mut() {
+    fn refresh_granular_channel_assignments(&mut self) {
+        if let Some(granular) = self.granular.as_mut() {
             let n_sources = granular.configured_wavs.max(1).min(granular.sources.len());
             let config = granular.config;
             let seed = lcg_next(&mut self.rng_state) as u64;
@@ -976,7 +977,8 @@ impl Engine {
                 0.0
             };
             let l = (l + bb_sample).clamp(-1.0, 1.0);
-            let r = (r + bb_sample).clamp(-1.0, 1.0);            frame[0] = (l * i16::MAX as f32) as i16;
+            let r = (r + bb_sample).clamp(-1.0, 1.0);
+            frame[0] = (l * i16::MAX as f32) as i16;
             frame[1] = (r * i16::MAX as f32) as i16;
         }
     }

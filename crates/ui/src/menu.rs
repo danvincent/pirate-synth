@@ -235,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn menu_has_fourteen_items() {
+    fn menu_has_fifteen_items() {
         let menu = MenuState::new(0.0, 8, 8);
         assert_eq!(menu.total_items(), 15);
         assert_eq!(menu.lines().len(), 15);
@@ -372,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn menu_total_items_is_14() {
+    fn menu_total_items_is_15() {
         let mut menu = MenuState::new(0.0, 4, 2);
         assert_eq!(menu.total_items(), 15);
         menu.video_status = VideoStatus::NoHdmi;
