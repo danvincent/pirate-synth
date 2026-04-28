@@ -561,4 +561,66 @@ mod tests {
         assert_eq!(writes[0], vec![1, 2, 3, 4]);
         assert_eq!(writes[1], vec![5, 6, 7, 8]);
     }
+
+    #[test]
+    fn parse_spi_device_all_supported_buses() {
+        use rppal::spi::{Bus, SlaveSelect};
+        let cases = [
+            ("/dev/spidev1.0", Bus::Spi1, SlaveSelect::Ss0),
+            ("/dev/spidev2.0", Bus::Spi2, SlaveSelect::Ss0),
+            ("/dev/spidev3.0", Bus::Spi3, SlaveSelect::Ss0),
+            ("/dev/spidev4.0", Bus::Spi4, SlaveSelect::Ss0),
+            ("/dev/spidev5.0", Bus::Spi5, SlaveSelect::Ss0),
+            ("/dev/spidev6.0", Bus::Spi6, SlaveSelect::Ss0),
+        ];
+        for (path, expected_bus, expected_ss) in cases {
+            let result = parse_spi_device(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+            assert_eq!(result, (expected_bus, expected_ss), "failed for {path}");
+        }
+    }
+
+    #[test]
+    fn parse_spi_device_chip_selects_2_and_3() {
+        use rppal::spi::{Bus, SlaveSelect};
+        assert_eq!(
+            parse_spi_device("/dev/spidev0.2").unwrap(),
+            (Bus::Spi0, SlaveSelect::Ss2)
+        );
+        assert_eq!(
+            parse_spi_device("/dev/spidev0.3").unwrap(),
+            (Bus::Spi0, SlaveSelect::Ss3)
+        );
+    }
+
+    #[test]
+    fn parse_spi_device_invalid_bus_returns_error() {
+        assert!(
+            parse_spi_device("/dev/spidev7.0").is_err(),
+            "spidev7 is not a supported bus"
+        );
+        assert!(
+            parse_spi_device("/dev/uart0.0").is_err(),
+            "uart0 is not a supported bus"
+        );
+    }
+
+    #[test]
+    fn parse_spi_device_invalid_chip_select_returns_error() {
+        assert!(
+            parse_spi_device("/dev/spidev0.4").is_err(),
+            "chip select 4 is not supported"
+        );
+        assert!(
+            parse_spi_device("/dev/spidev0.9").is_err(),
+            "chip select 9 is not supported"
+        );
+    }
+
+    #[test]
+    fn parse_spi_device_too_many_parts_returns_error() {
+        assert!(
+            parse_spi_device("/dev/spidev0.0.0").is_err(),
+            "three-part path must be rejected"
+        );
+    }
 }

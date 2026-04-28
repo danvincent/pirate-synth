@@ -213,4 +213,22 @@ mod tests {
         let states = reader.raw_states();
         assert_eq!(states.len(), 0, "no hardware pins in test reader — raw_states must be empty");
     }
+
+    #[test]
+    fn test_sync_state_and_poll_pressed_after_sync() {
+        // In test mode, sync_state iterates over empty pin/last lists.
+        // Calling it then poll_pressed must both succeed without panicking.
+        let config = ButtonConfig::new(vec![(5, Button::Up), (6, Button::Down)], None).unwrap();
+        let mut reader = ButtonReader::from_config_for_test(config);
+        reader.sync_state();
+        // poll_pressed with no hardware pins must return Ok(None)
+        assert_eq!(reader.poll_pressed().unwrap(), None);
+    }
+
+    #[test]
+    fn test_poll_shutdown_pin_returns_false_when_none() {
+        let config = ButtonConfig::new(vec![(5, Button::Up)], None).unwrap();
+        let mut reader = ButtonReader::from_config_for_test(config);
+        assert!(!reader.poll_shutdown_pin(), "poll_shutdown_pin must return false when shutdown_pin is None");
+    }
 }

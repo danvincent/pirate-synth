@@ -117,6 +117,11 @@ impl Drop for LinuxFbDisplay {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::menu::MenuState;
+    use std::env;
+    use std::fs;
+
     fn rgb565_to_bgra(hi: u8, lo: u8) -> [u8; 4] {
         let px = ((hi as u16) << 8) | lo as u16;
         let r5 = ((px >> 11) & 0x1F) as u8;
@@ -126,6 +131,13 @@ mod tests {
         let g8 = (g6 << 2) | (g6 >> 4);
         let b8 = (b5 << 3) | (b5 >> 2);
         [b8, g8, r8, 0xFF]
+    }
+
+    /// Create a temporary writable file and return its path.
+    fn temp_fb_file(tag: &str) -> std::path::PathBuf {
+        let path = env::temp_dir().join(format!("pirate_synth_test_fb_{tag}.bin"));
+        fs::write(&path, b"").expect("failed to create temp fb file");
+        path
     }
 
     #[test]
@@ -172,5 +184,139 @@ mod tests {
         let height: u16 = 240;
         let expected_buf_size = width as usize * height as usize * 4;
         assert_eq!(expected_buf_size, 307_200);
+    }
+
+    #[test]
+    fn test_linuxfb_new_with_temp_file() {
+        let path = temp_fb_file("new");
+        let display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240);
+        assert!(display.is_ok(), "LinuxFbDisplay::new must succeed with a valid writable file");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_linuxfb_draw_menu_writes_correct_byte_count() {
+        let path = temp_fb_file("menu");
+        let mut display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240).unwrap();
+        let state = MenuState::new(0.0, 4, 4);
+        display.draw_menu(&state).expect("draw_menu must succeed");
+        let written = fs::read(&path).unwrap();
+        // 240 × 240 pixels × 4 bytes (BGRA8888) = 230 400
+        assert_eq!(written.len(), 240 * 240 * 4, "draw_menu must write 240×240×4 bytes");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_linuxfb_draw_menu_output_has_alpha_0xff() {
+        let path = temp_fb_file("menu_alpha");
+        let mut display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240).unwrap();
+        let state = MenuState::new(0.0, 4, 4);
+        display.draw_menu(&state).unwrap();
+        let written = fs::read(&path).unwrap();
+        // Every 4th byte is the alpha channel and must be 0xFF
+        let all_opaque = written.chunks_exact(4).all(|px| px[3] == 0xFF);
+        assert!(all_opaque, "alpha channel must be 0xFF for every pixel");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_linuxfb_draw_idle_screen_writes_bytes() {
+        let path = temp_fb_file("idle");
+        let mut display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240).unwrap();
+        let state = MenuState::new(0.0, 4, 4);
+        display.draw_idle_screen(&state, "pirate").expect("draw_idle_screen must succeed");
+        let written = fs::read(&path).unwrap();
+        assert_eq!(written.len(), 240 * 240 * 4);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_linuxfb_draw_idle_screen_differs_with_hostname() {
+        let path_a = temp_fb_file("idle_a");
+        let path_b = temp_fb_file("idle_b");
+        let state = MenuState::new(0.0, 4, 4);
+
+        let mut disp_a = LinuxFbDisplay::new(path_a.to_str().unwrap(), 240, 240).unwrap();
+        disp_a.draw_idle_screen(&state, "hostname-a").unwrap();
+
+        let mut disp_b = LinuxFbDisplay::new(path_b.to_str().unwrap(), 240, 240).unwrap();
+        disp_b.draw_idle_screen(&state, "hostname-b").unwrap();
+
+        let a = fs::read(&path_a).unwrap();
+        let b = fs::read(&path_b).unwrap();
+        assert_ne!(a, b, "idle screen output must differ for different hostnames");
+        let _ = fs::remove_file(&path_a);
+        let _ = fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn test_linuxfb_draw_powering_down_screen_writes_bytes() {
+        let path = temp_fb_file("powerdown");
+        let mut display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240).unwrap();
+        display
+            .draw_powering_down_screen()
+            .expect("draw_powering_down_screen must succeed");
+        let written = fs::read(&path).unwrap();
+        assert_eq!(written.len(), 240 * 240 * 4);
+        // Red pixels (0xF800 → R=0xFF, G=0, B=0 → BGRA=[0,0,0xFF,0xFF]) must be present
+        let has_red = written
+            .chunks_exact(4)
+            .any(|px| px[2] > 0xF0 && px[0] == 0 && px[1] == 0);
+        assert!(has_red, "powering-down screen must contain at least one red pixel");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_linuxfb_clear_and_backlight_off_writes_black_frame() {
+        let path = temp_fb_file("clear");
+        let mut display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240).unwrap();
+        display
+            .clear_and_backlight_off()
+            .expect("clear_and_backlight_off must succeed");
+        let written = fs::read(&path).unwrap();
+        assert_eq!(written.len(), 240 * 240 * 4);
+        // A cleared framebuffer is all black pixels: BGRA = [0, 0, 0, 0xFF]
+        let all_black = written.chunks_exact(4).all(|px| px[0] == 0 && px[1] == 0 && px[2] == 0 && px[3] == 0xFF);
+        assert!(all_black, "cleared framebuffer must contain only black pixels");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_linuxfb_second_draw_overwrites_first() {
+        let path = temp_fb_file("overwrite");
+        let mut display = LinuxFbDisplay::new(path.to_str().unwrap(), 240, 240).unwrap();
+        let state = MenuState::new(0.0, 4, 4);
+        display.draw_menu(&state).unwrap();
+        display.clear_and_backlight_off().unwrap();
+        // After clear, all pixels must be black
+        let written = fs::read(&path).unwrap();
+        let all_black = written.chunks_exact(4).all(|px| px[0] == 0 && px[1] == 0 && px[2] == 0 && px[3] == 0xFF);
+        assert!(all_black, "second draw must overwrite first");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_linuxfb_rgb565_green_conversion() {
+        // 0x07E0 = pure green in RGB565 (G=63, R=0, B=0)
+        let [b, g, r, a] = rgb565_to_bgra(0x07, 0xE0);
+        assert_eq!(r, 0x00);
+        assert!(g > 0xF0, "G channel must be near max for pure green");
+        assert_eq!(b, 0x00);
+        assert_eq!(a, 0xFF);
+    }
+
+    #[test]
+    fn test_linuxfb_rgb565_various_colors() {
+        // Cyan = 0x07FF: R=0, G=63, B=31
+        let [b, g, r, _a] = rgb565_to_bgra(0x07, 0xFF);
+        assert_eq!(r, 0x00);
+        assert!(g > 0xF0);
+        assert!(b > 0xF0);
+
+        // Yellow = 0xFFE0: R=31, G=63, B=0
+        let [b2, g2, r2, _a2] = rgb565_to_bgra(0xFF, 0xE0);
+        assert!(r2 > 0xF0);
+        assert!(g2 > 0xF0);
+        assert_eq!(b2, 0x00);
     }
 }

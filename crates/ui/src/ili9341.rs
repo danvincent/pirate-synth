@@ -216,4 +216,73 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn test_ili9341_init_commands_have_correct_data_lengths() {
+        for (cmd, data) in Ili9341Display::init_commands() {
+            match cmd {
+                0x01 => assert!(data.is_empty(), "SWRESET has no data bytes"),
+                0x11 => assert!(data.is_empty(), "SLPOUT has no data bytes"),
+                0x29 => assert!(data.is_empty(), "DISPON has no data bytes"),
+                0xC0 => assert_eq!(data.len(), 1, "PWCTR1"),
+                0xC1 => assert_eq!(data.len(), 1, "PWCTR2"),
+                0xC5 => assert_eq!(data.len(), 2, "VMCTR1"),
+                0xC7 => assert_eq!(data.len(), 1, "VMCTR2"),
+                0x36 => assert_eq!(data.len(), 1, "MADCTL"),
+                0x3A => assert_eq!(data.len(), 1, "PIXFMT"),
+                0xB1 => assert_eq!(data.len(), 2, "FRMCTR1"),
+                0xB6 => assert_eq!(data.len(), 3, "DFUNCTR"),
+                0x26 => assert_eq!(data.len(), 1, "GAMSET"),
+                0xE0 => assert_eq!(data.len(), 15, "GMCTRP1"),
+                0xE1 => assert_eq!(data.len(), 15, "GMCTRN1"),
+                _ => panic!("unexpected command 0x{cmd:02X}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_ili9341_caset_encodes_320_wide_window() {
+        let bytes = Ili9341Display::caset_bytes();
+        // Column Address Set: start = 0x0000, end = 0x013F (= 319)
+        let start = ((bytes[0] as u16) << 8) | bytes[1] as u16;
+        let end = ((bytes[2] as u16) << 8) | bytes[3] as u16;
+        assert_eq!(start, 0);
+        assert_eq!(end, 319, "CASET end must be 319 for a 320-pixel wide display");
+    }
+
+    #[test]
+    fn test_ili9341_paset_encodes_240_tall_window() {
+        let bytes = Ili9341Display::paset_bytes();
+        // Page Address Set: start = 0x0000, end = 0x00EF (= 239)
+        let start = ((bytes[0] as u16) << 8) | bytes[1] as u16;
+        let end = ((bytes[2] as u16) << 8) | bytes[3] as u16;
+        assert_eq!(start, 0);
+        assert_eq!(end, 239, "PASET end must be 239 for a 240-pixel tall display");
+    }
+
+    #[test]
+    fn test_ili9341_init_has_sleep_commands() {
+        let cmds: Vec<u8> = Ili9341Display::init_commands()
+            .iter()
+            .map(|(cmd, _)| *cmd)
+            .collect();
+        // SWRESET (0x01) must appear before SLPOUT (0x11)
+        let reset_pos = cmds.iter().position(|&c| c == 0x01).unwrap();
+        let slpout_pos = cmds.iter().position(|&c| c == 0x11).unwrap();
+        assert!(reset_pos < slpout_pos, "SWRESET must come before SLPOUT");
+        // DISPON (0x29) must be last
+        assert_eq!(*cmds.last().unwrap(), 0x29, "DISPON must be the last command");
+    }
+
+    #[test]
+    fn test_ili9341_gamma_curve_bytes_non_zero() {
+        for (cmd, data) in Ili9341Display::init_commands() {
+            if cmd == 0xE0 || cmd == 0xE1 {
+                assert!(
+                    data.iter().any(|&b| b != 0),
+                    "gamma correction curve must contain non-zero bytes"
+                );
+            }
+        }
+    }
 }

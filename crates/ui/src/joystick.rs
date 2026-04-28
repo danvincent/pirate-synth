@@ -94,6 +94,9 @@ impl JoystickButtonReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::fs;
+    use std::io::Write;
 
     fn make_event(event_type: u8, number: u8, value: i16) -> [u8; 8] {
         let [v0, v1] = value.to_le_bytes();
@@ -125,6 +128,19 @@ mod tests {
             }
             _ => None,
         }
+    }
+
+    /// Write events to a temp file and open a JoystickButtonReader on it.
+    fn reader_with_events(tag: &str, events: &[[u8; 8]]) -> (JoystickButtonReader, std::path::PathBuf) {
+        let path = env::temp_dir().join(format!("pirate_synth_joystick_{tag}.bin"));
+        let mut f = fs::File::create(&path).expect("failed to create temp joystick file");
+        for ev in events {
+            f.write_all(ev).unwrap();
+        }
+        drop(f);
+        let reader = JoystickButtonReader::new(path.to_str().unwrap())
+            .expect("JoystickButtonReader::new must succeed with a readable file");
+        (reader, path)
     }
 
     #[test]
@@ -186,5 +202,124 @@ mod tests {
     fn test_unhandled_button_ignored() {
         let buf = make_event(JS_EVENT_BUTTON, 0, 1); // A button - not mapped
         assert_eq!(parse_event(&buf), None);
+    }
+
+    // ── Tests using JoystickButtonReader::new() with temp files ─────────────
+
+    #[test]
+    fn test_joystick_new_with_empty_file() {
+        let path = env::temp_dir().join("pirate_synth_joystick_empty.bin");
+        fs::write(&path, b"").unwrap();
+        let _reader = JoystickButtonReader::new(path.to_str().unwrap())
+            .expect("new() must succeed on a readable empty file");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_dpad_left_from_file() {
+        let event = make_event(JS_EVENT_AXIS, 6, -32767);
+        let (mut reader, path) = reader_with_events("left", &[event]);
+        assert_eq!(reader.poll_pressed(), Some(Button::Left));
+        // Second poll hits EOF → returns None
+        assert_eq!(reader.poll_pressed(), None);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_dpad_right_from_file() {
+        let event = make_event(JS_EVENT_AXIS, 6, 32767);
+        let (mut reader, path) = reader_with_events("right", &[event]);
+        assert_eq!(reader.poll_pressed(), Some(Button::Right));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_dpad_up_from_file() {
+        let event = make_event(JS_EVENT_AXIS, 7, -32767);
+        let (mut reader, path) = reader_with_events("up", &[event]);
+        assert_eq!(reader.poll_pressed(), Some(Button::Up));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_dpad_down_from_file() {
+        let event = make_event(JS_EVENT_AXIS, 7, 32767);
+        let (mut reader, path) = reader_with_events("down", &[event]);
+        assert_eq!(reader.poll_pressed(), Some(Button::Down));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_start_button_from_file() {
+        let event = make_event(JS_EVENT_BUTTON, 7, 1);
+        let (mut reader, path) = reader_with_events("start", &[event]);
+        assert_eq!(reader.poll_pressed(), Some(Button::Select));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_select_button_from_file() {
+        let event = make_event(JS_EVENT_BUTTON, 6, 1);
+        let (mut reader, path) = reader_with_events("select", &[event]);
+        assert_eq!(reader.poll_pressed(), Some(Button::Back));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_release_skipped() {
+        // Button release (value=0) followed by button press
+        let release = make_event(JS_EVENT_BUTTON, 7, 0);
+        let press = make_event(JS_EVENT_BUTTON, 7, 1);
+        let (mut reader, path) = reader_with_events("release", &[release, press]);
+        // Release is skipped; press returns Select
+        assert_eq!(reader.poll_pressed(), Some(Button::Select));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_unmapped_button_drains_to_none() {
+        // Unmapped button (number=0) returns None (drains all events)
+        let event = make_event(JS_EVENT_BUTTON, 0, 1);
+        let (mut reader, path) = reader_with_events("unmapped", &[event]);
+        assert_eq!(reader.poll_pressed(), None);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_init_event_stripped_and_decoded() {
+        // INIT|AXIS event should still decode correctly
+        let event = make_event(JS_EVENT_AXIS | JS_EVENT_INIT, 6, -32767);
+        let (mut reader, path) = reader_with_events("init", &[event]);
+        assert_eq!(reader.poll_pressed(), Some(Button::Left));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_neutral_axis_returns_none() {
+        // Neutral axis event (value=0) → None; hits EOF on second read
+        let event = make_event(JS_EVENT_AXIS, 6, 0);
+        let (mut reader, path) = reader_with_events("neutral", &[event]);
+        assert_eq!(reader.poll_pressed(), None);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_empty_file_returns_none() {
+        let path = env::temp_dir().join("pirate_synth_joystick_eof.bin");
+        fs::write(&path, b"").unwrap();
+        let mut reader = JoystickButtonReader::new(path.to_str().unwrap()).unwrap();
+        assert_eq!(reader.poll_pressed(), None);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_joystick_multiple_events_first_mapped_returned() {
+        // Write: unmapped axis (neutral), then Left press
+        let neutral = make_event(JS_EVENT_AXIS, 6, 0);
+        let left = make_event(JS_EVENT_AXIS, 6, -32767);
+        let (mut reader, path) = reader_with_events("multi", &[neutral, left]);
+        // neutral is skipped, left is returned
+        assert_eq!(reader.poll_pressed(), Some(Button::Left));
+        let _ = fs::remove_file(&path);
     }
 }

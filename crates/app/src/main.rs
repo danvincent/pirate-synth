@@ -1671,4 +1671,105 @@ mod tests {
         let merged = apply_user_config(base, user);
         assert_eq!(merged.spi_device.as_deref(), Some("/dev/spidev0.0"));
     }
+
+    // ── New tests for previously-uncovered lines ─────────────────────────────
+
+    #[test]
+    fn test_load_config_from_existing_file() {
+        let path = std::env::temp_dir().join("pirate_synth_test_load_config.toml");
+        std::fs::write(&path, "sample_rate = 22050\noscillators = 4\n").unwrap();
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.sample_rate, 22050);
+        assert_eq!(config.oscillators, 4);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_load_user_config_from_existing_file() {
+        let path =
+            std::env::temp_dir().join("pirate_synth_test_load_user_config.toml");
+        std::fs::write(&path, "oscillators = 3\nreverb_wet = 0.5\n").unwrap();
+        let result = load_user_config(&path).unwrap();
+        assert!(result.is_some(), "load_user_config must return Some when file exists");
+        let user = result.unwrap();
+        assert_eq!(user.oscillators, Some(3));
+        assert!((user.reverb_wet.unwrap() - 0.5).abs() < 0.001);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_load_user_config_missing_file_returns_none() {
+        let path = Path::new("/tmp/pirate_synth_user_config_definitely_absent.toml");
+        let result = load_user_config(path).unwrap();
+        assert!(result.is_none(), "load_user_config must return None for absent file");
+    }
+
+    #[test]
+    fn test_user_config_path_returns_some_when_home_set() {
+        if std::env::var_os("HOME").is_some() {
+            let path = user_config_path().expect("user_config_path must return Some when HOME is set");
+            assert!(
+                path.to_string_lossy().ends_with(".pirate-synth.toml"),
+                "user config path must end with .pirate-synth.toml"
+            );
+        }
+    }
+
+    #[test]
+    fn test_load_bank_uses_builtins_for_empty_dir() {
+        let tmp = std::env::temp_dir().join("pirate_synth_test_load_bank_empty");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let result = load_bank(&tmp, "nonexistent_bank", 1);
+        assert!(result.is_ok(), "load_bank must succeed with an empty dir (falls back to builtins)");
+        assert!(!result.unwrap().is_empty(), "load_bank must return at least one builtin wavetable");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_initialize_engine_with_empty_wavetable_dir() {
+        let tmp = std::env::temp_dir().join("pirate_synth_test_init_engine");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let mut cfg = AppConfig::default();
+        // Point wav_dir to a non-existent path so WAV loading is skipped
+        cfg.wav_dir = tmp.join("wav_nonexistent");
+        cfg.wavetable_dir = tmp.clone();
+        cfg.oscillators = 1;
+        let engine = initialize_engine(&cfg, "bank1");
+        assert!(engine.is_ok(), "initialize_engine must succeed using builtin wavetables");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_apply_engine_params_runs_without_panicking() {
+        let tmp = std::env::temp_dir().join("pirate_synth_test_apply_params");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let mut cfg = AppConfig::default();
+        cfg.wav_dir = tmp.join("wav_nonexistent");
+        cfg.wavetable_dir = tmp.clone();
+        cfg.oscillators = 1;
+        let mut engine = initialize_engine(&cfg, "bank1").unwrap();
+        let menu = MenuState::new(0.0, 4, 4);
+        apply_engine_params(&mut engine, &menu, &cfg);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_apply_engine_params_with_non_default_config() {
+        let tmp = std::env::temp_dir().join("pirate_synth_test_apply_params2");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let mut cfg = AppConfig::default();
+        cfg.wav_dir = tmp.join("wav_nonexistent");
+        cfg.wavetable_dir = tmp.clone();
+        cfg.oscillators = 1;
+        cfg.reverb_enabled = false;
+        cfg.tremolo_enabled = false;
+        cfg.fm_enabled = true;
+        cfg.fm_depth = 0.5;
+        cfg.granular_active = true;
+        let mut engine = initialize_engine(&cfg, "bank1").unwrap();
+        let mut menu = MenuState::new(0.0, 4, 4);
+        menu.fine_tune_cents = 50.0;
+        apply_engine_params(&mut engine, &menu, &cfg);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
