@@ -7,6 +7,7 @@
 #
 # Options:
 #   --armv6   Deploy the ARMv6 build (default: ARMhf)
+#   --gpi     Deploy the GPi CASE build (ARMv6 + GPi config/service)
 #
 # Examples:
 #   scripts/deploy.sh user@192.168.1.50
@@ -16,6 +17,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 BUNDLE_NAME="pirate-synth-sdcard"
+CONFIG_FILE="config.toml"
 UPDATE_SCRIPT="$ROOT_DIR/scripts/update.sh"
 
 # --- argument parsing -------------------------------------------------------
@@ -24,6 +26,11 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --armv6)
       BUNDLE_NAME="pirate-synth-sdcard-armv6"
+      shift
+      ;;
+    --gpi)
+      BUNDLE_NAME="pirate-synth-sdcard-gpi"
+      CONFIG_FILE="config-gpi.toml"
       shift
       ;;
     -*)
@@ -66,15 +73,15 @@ for TARGET in "${TARGETS[@]}"; do
 
   if [[ "$RESET_CONFIG" == "true" ]]; then
     echo "  --> Resetting config to default on $TARGET ..."
-    ssh "$TARGET" "sudo install -m 0644 $REMOTE_STAGING/config/config.toml /etc/pirate-synth/config.toml"
+    ssh -t -t "$TARGET" "sudo install -m 0644 $REMOTE_STAGING/config/$CONFIG_FILE /etc/pirate-synth/config.toml"
   fi
 
   echo "  --> Copying update script to $TARGET:$REMOTE_UPDATE_SCRIPT ..."
   rsync -az "$UPDATE_SCRIPT" "$TARGET:$REMOTE_UPDATE_SCRIPT"
 
   echo "  --> Running update on $TARGET (sudo required) ..."
-  # -t allocates a pseudo-TTY so sudo can prompt for a password interactively.
-  ssh -t "$TARGET" "sudo bash $REMOTE_UPDATE_SCRIPT"
+  # -t -t forces PTY allocation even when local stdin is not a terminal, allowing sudo to prompt for a password.
+  ssh -t -t "$TARGET" "sudo bash $REMOTE_UPDATE_SCRIPT"
 
   echo "===> $TARGET done"
 done

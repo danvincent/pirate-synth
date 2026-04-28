@@ -7,8 +7,10 @@ BINARY_NAME="pirate_synth"
 DIST_DIR="$ROOT_DIR/dist"
 ARMHF_BUNDLE_NAME="pirate-synth-sdcard"
 ARMV6_BUNDLE_NAME="pirate-synth-sdcard-armv6"
+GPI_BUNDLE_NAME="pirate-synth-sdcard-gpi"
 ARMHF_STAGE_DIR="$DIST_DIR/$ARMHF_BUNDLE_NAME"
 ARMV6_STAGE_DIR="$DIST_DIR/$ARMV6_BUNDLE_NAME"
+GPI_STAGE_DIR="$DIST_DIR/$GPI_BUNDLE_NAME"
 BOOT_SRC="$ROOT_DIR/sdcard/boot/firmware"
 BUILD_BIN_DIR="$DIST_DIR/.binaries"
 ARMHF_BINARY="$BUILD_BIN_DIR/${BINARY_NAME}-armhf"
@@ -67,9 +69,18 @@ fi
 
 stage_bundle "$ARMHF_STAGE_DIR" "$ARMHF_BINARY"
 stage_bundle "$ARMV6_STAGE_DIR" "$ARMV6_BINARY"
+stage_bundle "$GPI_STAGE_DIR" "$ARMV6_BINARY"
+
+install -m 0644 "$ROOT_DIR/sdcard/boot/firmware/pirate-synth/config/config-gpi.toml" \
+  "$GPI_STAGE_DIR/boot/firmware/pirate-synth/config/config-gpi.toml"
+install -m 0755 "$ROOT_DIR/sdcard/boot/firmware/pirate-synth/install-gpi.sh" \
+  "$GPI_STAGE_DIR/boot/firmware/pirate-synth/install-gpi.sh"
+install -m 0644 "$ROOT_DIR/sdcard/boot/firmware/pirate-synth/pirate-synth-gpi-firstboot.service" \
+  "$GPI_STAGE_DIR/boot/firmware/pirate-synth/pirate-synth-firstboot.service"
 
 archive_bundle "$ARMHF_BUNDLE_NAME"
 archive_bundle "$ARMV6_BUNDLE_NAME"
+archive_bundle "$GPI_BUNDLE_NAME"
 rm -rf "$BUILD_BIN_DIR"
 
 echo "Packaged bundles in: $DIST_DIR"

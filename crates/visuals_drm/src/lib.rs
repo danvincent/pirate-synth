@@ -282,15 +282,7 @@ fn render_static_layers(frame: &mut [u8], fb: &Framebuffer, level: f32, frame_in
                 gray *= 0.25 + level * 0.9;
                 gray = gray.clamp(0.0, 255.0);
                 let gray = gray as u8;
-                fill_block(
-                    frame,
-                    fb,
-                    x + x_offset,
-                    y + y_offset,
-                    block,
-                    block,
-                    gray,
-                );
+                fill_block(frame, fb, x + x_offset, y + y_offset, block, block, gray);
             }
         }
     }

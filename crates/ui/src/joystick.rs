@@ -1,0 +1,342 @@
+use crate::menu::Button;
+use anyhow::{Context, Result};
+use log::warn;
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::os::unix::io::AsRawFd;
+
+const JS_EVENT_BUTTON: u8 = 0x01;
+const JS_EVENT_AXIS: u8 = 0x02;
+const JS_EVENT_INIT: u8 = 0x80;
+
+/// Reads D-pad and button events from a Linux joystick device (`/dev/input/js0`).
+///
+/// Uses the joystick API (8-byte `js_event` structs) in non-blocking mode.
+/// Maps D-pad axes and Start/Select buttons to the `Button` enum.
+pub struct JoystickButtonReader {
+    file: std::fs::File,
+}
+
+impl JoystickButtonReader {
+    pub fn new(path: &str) -> Result<Self> {
+        let file = OpenOptions::new()
+            .read(true)
+            .open(path)
+            .with_context(|| format!("failed to open joystick device {path}"))?;
+
+        // Set O_NONBLOCK so poll_pressed never blocks
+        let fd = file.as_raw_fd();
+        // SAFETY: fd is valid and owned by `file`; F_GETFL/F_SETFL are standard POSIX.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL, 0) };
+        if flags < 0 {
+            anyhow::bail!("fcntl F_GETFL failed on {path}");
+        }
+        let ret = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+        if ret < 0 {
+            anyhow::bail!("fcntl F_SETFL O_NONBLOCK failed on {path}");
+        }
+
+        Ok(Self { file })
+    }
+
+    /// Returns the next mapped button press, or `None` if no event is ready.
+    ///
+    /// Reads all queued events and returns the first that maps to a `Button`.
+    /// Discards init events (`JS_EVENT_INIT`), neutral axis returns, and
+    /// button-release events (value=0).
+    pub fn poll_pressed(&mut self) -> Option<Button> {
+        let mut buf = [0u8; 8];
+        loop {
+            match self.file.read_exact(&mut buf) {
+                Ok(()) => {
+                    let event_type = buf[6] & !JS_EVENT_INIT; // strip init flag
+                    let number = buf[7];
+                    let value = i16::from_le_bytes([buf[4], buf[5]]);
+
+                    let button = match event_type {
+                        t if t == JS_EVENT_AXIS => match (number, value) {
+                            (6, v) if v < -16000 => Some(Button::Left),
+                            (6, v) if v > 16000 => Some(Button::Right),
+                            (7, v) if v < -16000 => Some(Button::Up),
+                            (7, v) if v > 16000 => Some(Button::Down),
+                            _ => None, // neutral or unhandled axis
+                        },
+                        t if t == JS_EVENT_BUTTON => {
+                            if value == 0 {
+                                None // button release - ignore
+                            } else {
+                                match number {
+                                    6 => Some(Button::Back),   // BTN_SELECT
+                                    7 => Some(Button::Select), // BTN_START
+                                    _ => None,
+                                }
+                            }
+                        }
+                        _ => None,
+                    };
+
+                    if button.is_some() {
+                        return button;
+                    }
+                    // event not mapped - loop to drain next event
+                }
+                Err(ref e) if e.raw_os_error() == Some(libc::EAGAIN) => return None,
+                Err(ref e) if e.raw_os_error() == Some(libc::EWOULDBLOCK) => return None,
+                Err(e) => {
+                    warn!("joystick read error: {e}");
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::fs;
+    use std::io::Write;
+
+    fn make_event(event_type: u8, number: u8, value: i16) -> [u8; 8] {
+        let [v0, v1] = value.to_le_bytes();
+        [0, 0, 0, 0, v0, v1, event_type, number]
+    }
+
+    fn parse_event(buf: &[u8; 8]) -> Option<Button> {
+        let event_type = buf[6] & !JS_EVENT_INIT;
+        let number = buf[7];
+        let value = i16::from_le_bytes([buf[4], buf[5]]);
+        match event_type {
+            t if t == JS_EVENT_AXIS => match (number, value) {
+                (6, v) if v < -16000 => Some(Button::Left),
+                (6, v) if v > 16000 => Some(Button::Right),
+                (7, v) if v < -16000 => Some(Button::Up),
+                (7, v) if v > 16000 => Some(Button::Down),
+                _ => None,
+            },
+            t if t == JS_EVENT_BUTTON => {
+                if value == 0 {
+                    None
+                } else {
+                    match number {
+                        6 => Some(Button::Back),
+                        7 => Some(Button::Select),
+                        _ => None,
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// RAII guard that deletes a temp file on drop, ensuring cleanup even if tests panic.
+    struct TempFile(std::path::PathBuf);
+
+    impl TempFile {
+        fn create_with_events(tag: &str, events: &[[u8; 8]]) -> Self {
+            let path = env::temp_dir().join(format!("pirate_synth_joystick_{tag}.bin"));
+            let mut f = fs::File::create(&path).expect("failed to create temp joystick file");
+            for ev in events {
+                f.write_all(ev).unwrap();
+            }
+            TempFile(path)
+        }
+
+        fn create_empty(tag: &str) -> Self {
+            let path = env::temp_dir().join(format!("pirate_synth_joystick_{tag}.bin"));
+            fs::write(&path, b"").expect("failed to create empty temp joystick file");
+            TempFile(path)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+
+        fn open_reader(&self) -> JoystickButtonReader {
+            JoystickButtonReader::new(self.0.to_str().unwrap())
+                .expect("JoystickButtonReader::new must succeed with a readable file")
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn test_dpad_left() {
+        let buf = make_event(JS_EVENT_AXIS, 6, -32767);
+        assert_eq!(parse_event(&buf), Some(Button::Left));
+    }
+
+    #[test]
+    fn test_dpad_right() {
+        let buf = make_event(JS_EVENT_AXIS, 6, 32767);
+        assert_eq!(parse_event(&buf), Some(Button::Right));
+    }
+
+    #[test]
+    fn test_dpad_up() {
+        let buf = make_event(JS_EVENT_AXIS, 7, -32767);
+        assert_eq!(parse_event(&buf), Some(Button::Up));
+    }
+
+    #[test]
+    fn test_dpad_down() {
+        let buf = make_event(JS_EVENT_AXIS, 7, 32767);
+        assert_eq!(parse_event(&buf), Some(Button::Down));
+    }
+
+    #[test]
+    fn test_dpad_neutral_ignored() {
+        let buf = make_event(JS_EVENT_AXIS, 6, 0);
+        assert_eq!(parse_event(&buf), None);
+    }
+
+    #[test]
+    fn test_start_button_select() {
+        let buf = make_event(JS_EVENT_BUTTON, 7, 1);
+        assert_eq!(parse_event(&buf), Some(Button::Select));
+    }
+
+    #[test]
+    fn test_select_button_back() {
+        let buf = make_event(JS_EVENT_BUTTON, 6, 1);
+        assert_eq!(parse_event(&buf), Some(Button::Back));
+    }
+
+    #[test]
+    fn test_button_release_ignored() {
+        let buf = make_event(JS_EVENT_BUTTON, 7, 0);
+        assert_eq!(parse_event(&buf), None);
+    }
+
+    #[test]
+    fn test_init_flag_stripped() {
+        // JS_EVENT_INIT | JS_EVENT_AXIS should still map axis correctly
+        let buf = make_event(JS_EVENT_AXIS | JS_EVENT_INIT, 7, -32767);
+        assert_eq!(parse_event(&buf), Some(Button::Up));
+    }
+
+    #[test]
+    fn test_unhandled_button_ignored() {
+        let buf = make_event(JS_EVENT_BUTTON, 0, 1); // A button - not mapped
+        assert_eq!(parse_event(&buf), None);
+    }
+
+    // ── Tests using JoystickButtonReader::new() with temp files ─────────────
+
+    #[test]
+    fn test_joystick_new_with_empty_file() {
+        let tmp = TempFile::create_empty("new_empty");
+        let _reader = tmp.open_reader();
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_dpad_left_from_file() {
+        let event = make_event(JS_EVENT_AXIS, 6, -32767);
+        let tmp = TempFile::create_with_events("left", &[event]);
+        let mut reader = tmp.open_reader();
+        assert_eq!(reader.poll_pressed(), Some(Button::Left));
+        // Second poll hits EOF → returns None
+        assert_eq!(reader.poll_pressed(), None);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_dpad_right_from_file() {
+        let event = make_event(JS_EVENT_AXIS, 6, 32767);
+        let tmp = TempFile::create_with_events("right", &[event]);
+        let mut reader = tmp.open_reader();
+        assert_eq!(reader.poll_pressed(), Some(Button::Right));
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_dpad_up_from_file() {
+        let event = make_event(JS_EVENT_AXIS, 7, -32767);
+        let tmp = TempFile::create_with_events("up", &[event]);
+        let mut reader = tmp.open_reader();
+        assert_eq!(reader.poll_pressed(), Some(Button::Up));
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_dpad_down_from_file() {
+        let event = make_event(JS_EVENT_AXIS, 7, 32767);
+        let tmp = TempFile::create_with_events("down", &[event]);
+        let mut reader = tmp.open_reader();
+        assert_eq!(reader.poll_pressed(), Some(Button::Down));
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_start_button_from_file() {
+        let event = make_event(JS_EVENT_BUTTON, 7, 1);
+        let tmp = TempFile::create_with_events("start", &[event]);
+        let mut reader = tmp.open_reader();
+        assert_eq!(reader.poll_pressed(), Some(Button::Select));
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_select_button_from_file() {
+        let event = make_event(JS_EVENT_BUTTON, 6, 1);
+        let tmp = TempFile::create_with_events("select", &[event]);
+        let mut reader = tmp.open_reader();
+        assert_eq!(reader.poll_pressed(), Some(Button::Back));
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_release_skipped() {
+        // Button release (value=0) followed by button press
+        let release = make_event(JS_EVENT_BUTTON, 7, 0);
+        let press = make_event(JS_EVENT_BUTTON, 7, 1);
+        let tmp = TempFile::create_with_events("release", &[release, press]);
+        let mut reader = tmp.open_reader();
+        // Release is skipped; press returns Select
+        assert_eq!(reader.poll_pressed(), Some(Button::Select));
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_unmapped_button_drains_to_none() {
+        // Unmapped button (number=0) returns None (drains all events)
+        let event = make_event(JS_EVENT_BUTTON, 0, 1);
+        let tmp = TempFile::create_with_events("unmapped", &[event]);
+        let mut reader = tmp.open_reader();
+        assert_eq!(reader.poll_pressed(), None);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_init_event_stripped_and_decoded() {
+        // INIT|AXIS event should still decode correctly
+        let event = make_event(JS_EVENT_AXIS | JS_EVENT_INIT, 6, -32767);
+        let tmp = TempFile::create_with_events("init_ev", &[event]);
+        let mut reader = tmp.open_reader();
+        assert_eq!(reader.poll_pressed(), Some(Button::Left));
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_neutral_axis_returns_none() {
+        // Neutral axis event (value=0) → None; hits EOF on second read
+        let event = make_event(JS_EVENT_AXIS, 6, 0);
+        let tmp = TempFile::create_with_events("neutral", &[event]);
+        let mut reader = tmp.open_reader();
+        assert_eq!(reader.poll_pressed(), None);
+    }
+
+    #[test]
+    fn test_joystick_poll_pressed_empty_file_returns_none() {
+        let tmp = TempFile::create_empty("eof");
+        let mut reader = tmp.open_reader();
+        assert_eq!(reader.poll_pressed(), None);
+    }
+
+    #[test]
+    fn test_joystick_multiple_events_first_mapped_returned() {
+        // Write: unmapped axis (neutral), then Left press
+        let neutral = make_event(JS_EVENT_AXIS, 6, 0);
+        let left = make_event(JS_EVENT_AXIS, 6, -32767);
+        let tmp = TempFile::create_with_events("multi", &[neutral, left]);
+        let mut reader = tmp.open_reader();
+        // neutral is skipped, left is returned
+        assert_eq!(reader.poll_pressed(), Some(Button::Left));
+    }
+}

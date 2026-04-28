@@ -11,6 +11,7 @@ use engine::{Engine, ScaleMode, Wavetable};
 pub struct AudioConfig {
     pub sample_rate: u32,
     pub buffer_frames: usize,
+    pub device: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -77,17 +78,14 @@ fn run_audio_loop(
     command_rx: Receiver<AudioCommand>,
     level_tx: Option<Sender<f32>>,
 ) -> Result<()> {
-    let mut child = Command::new("aplay")
-        .args([
-            "-q",
-            "-f",
-            "S16_LE",
-            "-c",
-            "2",
-            "-r",
-            &config.sample_rate.to_string(),
-            "-",
-        ])
+    let sample_rate = config.sample_rate.to_string();
+    let mut command = Command::new("aplay");
+    command.args(["-q", "-f", "S16_LE", "-c", "2"]);
+    if let Some(device) = config.device.as_deref() {
+        command.args(["-D", device]);
+    }
+    let mut child = command
+        .args(["-r", sample_rate.as_str(), "-"])
         .stdin(Stdio::piped())
         .spawn()
         .context("failed to start aplay (alsa-utils)")?;

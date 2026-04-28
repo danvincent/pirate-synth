@@ -1,0 +1,33 @@
+// GPi CASE DPI display overlay — 16-bit RGB565, GPIO 2-17 only.
+//
+// The standard dpi24 overlay from Raspberry Pi OS claims GPIO 0-23 for DPI,
+// which conflicts with GPIO 18-19 needed by the GPi CASE PWM audio amplifier.
+// This overlay claims only GPIO 2-17 (the 16 data+control lines used in
+// RGB565 mode with dpi_output_format=0x6016), leaving GPIO 18-19 free for
+// PWM audio on the GPi CASE amplifier circuit.
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2835";
+
+    fragment@0 {
+        target = <&dpi>;
+        __overlay__ {
+            status = "okay";
+            pinctrl-names = "default";
+            pinctrl-0 = <&dpi_gpi_pins>;
+        };
+    };
+
+    fragment@1 {
+        target = <&gpio>;
+        __overlay__ {
+            dpi_gpi_pins: dpi_gpi_pins {
+                brcm,pins = <2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17>;
+                brcm,function = <6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6>;  /* alt2 = DPI */
+                brcm,pull = <0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0>;
+            };
+        };
+    };
+};

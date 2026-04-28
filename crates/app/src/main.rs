@@ -5,14 +5,17 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use audio_alsa::{command_channel, spawn_audio_thread, AudioCommand, AudioConfig};
 use controller::SynthController;
-use crossbeam_channel::{bounded, Receiver};
+use crossbeam_channel::{bounded, Receiver, Sender};
 use engine::{
     key_to_frequency_hz, load_wav_sources, load_wavetables, Engine, GranularConfig, ScaleMode,
 };
 use log::{debug, info, warn};
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use serde::Deserialize;
-use ui::{ButtonReader, MenuState, St7789Display, VideoStatus};
+use ui::{
+    ButtonConfig, ButtonReader, Ili9341Display, JoystickButtonReader, LinuxFbDisplay,
+    MenuState, St7789Display, VideoStatus,
+};
 use visuals_drm::{try_spawn_visuals, VisualsInitError};
 
 const DEFAULT_CONFIG_PATH: &str = "/etc/pirate-synth/config.toml";
@@ -39,8 +42,14 @@ struct AppConfig {
     wavetable_dir: PathBuf,
     #[serde(default = "default_wav_dir")]
     wav_dir: PathBuf,
-    #[serde(default = "default_spi_device")]
-    spi_device: String,
+    #[serde(default)]
+    spi_device: Option<String>,
+    #[serde(default = "default_hardware_profile")]
+    hardware_profile: String,
+    #[serde(default)]
+    dc_pin_override: Option<u8>,
+    #[serde(default)]
+    backlight_pin_override: Option<u8>,
     // Reverb
     #[serde(default = "default_reverb_enabled")]
     reverb_enabled: bool,
@@ -167,8 +176,8 @@ fn default_wavetable_dir() -> PathBuf {
 fn default_wav_dir() -> PathBuf {
     PathBuf::from("/var/lib/pirate-synth/WAV")
 }
-fn default_spi_device() -> String {
-    "/dev/spidev0.1".into()
+fn default_hardware_profile() -> String {
+    "pirate-audio".into()
 }
 
 fn default_reverb_enabled() -> bool {
@@ -305,7 +314,10 @@ impl Default for AppConfig {
             stereo_spread: default_stereo_spread(),
             wavetable_dir: default_wavetable_dir(),
             wav_dir: default_wav_dir(),
-            spi_device: default_spi_device(),
+            spi_device: None,
+            hardware_profile: default_hardware_profile(),
+            dc_pin_override: None,
+            backlight_pin_override: None,
             reverb_enabled: default_reverb_enabled(),
             reverb_wet: default_reverb_wet(),
             reverb_feedback: default_reverb_feedback(),
@@ -384,6 +396,9 @@ struct UserConfig {
     wavetable_dir: Option<PathBuf>,
     wav_dir: Option<PathBuf>,
     spi_device: Option<String>,
+    hardware_profile: Option<String>,
+    dc_pin_override: Option<u8>,
+    backlight_pin_override: Option<u8>,
     reverb_enabled: Option<bool>,
     reverb_wet: Option<f32>,
     reverb_feedback: Option<f32>,
@@ -457,17 +472,28 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         stereo_spread: user.stereo_spread.unwrap_or(base.stereo_spread),
         wavetable_dir: user.wavetable_dir.unwrap_or(base.wavetable_dir),
         wav_dir: user.wav_dir.unwrap_or(base.wav_dir),
-        spi_device: user.spi_device.unwrap_or(base.spi_device),
+        spi_device: user.spi_device.or(base.spi_device),
+        hardware_profile: user.hardware_profile.unwrap_or(base.hardware_profile),
+        dc_pin_override: user.dc_pin_override.or(base.dc_pin_override),
+        backlight_pin_override: user.backlight_pin_override.or(base.backlight_pin_override),
         reverb_enabled: user.reverb_enabled.unwrap_or(base.reverb_enabled),
         reverb_wet: user.reverb_wet.unwrap_or(base.reverb_wet),
         reverb_feedback: user.reverb_feedback.unwrap_or(base.reverb_feedback),
         reverb_damp: user.reverb_damp.unwrap_or(base.reverb_damp),
         reverb_comb_count: user.reverb_comb_count.unwrap_or(base.reverb_comb_count),
-        granular_reverb_enabled: user.granular_reverb_enabled.unwrap_or(base.granular_reverb_enabled),
+        granular_reverb_enabled: user
+            .granular_reverb_enabled
+            .unwrap_or(base.granular_reverb_enabled),
         granular_reverb_wet: user.granular_reverb_wet.unwrap_or(base.granular_reverb_wet),
-        granular_reverb_feedback: user.granular_reverb_feedback.unwrap_or(base.granular_reverb_feedback),
-        granular_reverb_damp: user.granular_reverb_damp.unwrap_or(base.granular_reverb_damp),
-        granular_reverb_comb_count: user.granular_reverb_comb_count.unwrap_or(base.granular_reverb_comb_count),
+        granular_reverb_feedback: user
+            .granular_reverb_feedback
+            .unwrap_or(base.granular_reverb_feedback),
+        granular_reverb_damp: user
+            .granular_reverb_damp
+            .unwrap_or(base.granular_reverb_damp),
+        granular_reverb_comb_count: user
+            .granular_reverb_comb_count
+            .unwrap_or(base.granular_reverb_comb_count),
         tremolo_enabled: user.tremolo_enabled.unwrap_or(base.tremolo_enabled),
         tremolo_depth: user.tremolo_depth.unwrap_or(base.tremolo_depth),
         crossfade_enabled: user.crossfade_enabled.unwrap_or(base.crossfade_enabled),
@@ -507,16 +533,16 @@ fn apply_user_config(base: AppConfig, user: UserConfig) -> AppConfig {
         granular_spawn_jitter: user
             .granular_spawn_jitter
             .unwrap_or(base.granular_spawn_jitter),
-        granular_channels: user
-            .granular_channels
-            .unwrap_or(base.granular_channels),
+        granular_channels: user.granular_channels.unwrap_or(base.granular_channels),
         granular_pitch_cents: user
             .granular_pitch_cents
             .unwrap_or(base.granular_pitch_cents),
         granular_wavs: user.granular_wavs.unwrap_or(base.granular_wavs),
         granular_volume: user.granular_volume.unwrap_or(base.granular_volume),
         granular_active: user.granular_active.unwrap_or(base.granular_active),
-        hdmi_visuals_enabled: user.hdmi_visuals_enabled.unwrap_or(base.hdmi_visuals_enabled),
+        hdmi_visuals_enabled: user
+            .hdmi_visuals_enabled
+            .unwrap_or(base.hdmi_visuals_enabled),
     }
 }
 
@@ -541,7 +567,11 @@ fn apply_engine_params(engine: &mut Engine, menu: &MenuState, config: &AppConfig
     engine.set_fine_tune_cents(menu.fine_tune_cents);
     engine.set_stereo_spread(menu.stereo_spread);
     engine.set_reverb(config.reverb_enabled, config.reverb_wet);
-    engine.set_reverb_feedback(config.reverb_feedback, config.reverb_damp, config.reverb_comb_count);
+    engine.set_reverb_feedback(
+        config.reverb_feedback,
+        config.reverb_damp,
+        config.reverb_comb_count,
+    );
     engine.set_granular_reverb(
         config.granular_reverb_enabled,
         config.granular_reverb_wet,
@@ -636,6 +666,199 @@ fn load_bank(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HardwareProfile {
+    PirateAudio,
+    GpiCase,
+}
+
+impl HardwareProfile {
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "pirate-audio" => Ok(Self::PirateAudio),
+            "gpi-case" => Ok(Self::GpiCase),
+            other => anyhow::bail!("Unknown hardware_profile: '{}'", other),
+        }
+    }
+
+    fn default_spi_device(self) -> &'static str {
+        match self {
+            Self::PirateAudio => "/dev/spidev0.1",
+            Self::GpiCase => "/dev/spidev0.0",
+        }
+    }
+
+    fn default_dc_pin(self) -> u8 {
+        match self {
+            Self::PirateAudio => 9,
+            Self::GpiCase => 25,
+        }
+    }
+
+    fn default_backlight_pin(self) -> Option<u8> {
+        match self {
+            Self::PirateAudio => Some(13),
+            Self::GpiCase => None,
+        }
+    }
+
+    fn default_alsa_device(self) -> Option<&'static str> {
+        match self {
+            Self::PirateAudio => None,
+            Self::GpiCase => Some("plughw:Headphones"),
+        }
+    }
+
+    fn button_config(self) -> Result<ButtonConfig> {
+        match self {
+            Self::PirateAudio => Ok(ButtonConfig::pirate_audio()),
+            Self::GpiCase => ButtonConfig::new(vec![], Some(26)),
+        }
+    }
+}
+
+fn resolve_spi_device(profile: &HardwareProfile, config: &AppConfig) -> String {
+    config
+        .spi_device
+        .clone()
+        .unwrap_or_else(|| profile.default_spi_device().to_string())
+}
+
+fn resolve_dc_pin(profile: &HardwareProfile, config: &AppConfig) -> u8 {
+    config
+        .dc_pin_override
+        .unwrap_or_else(|| profile.default_dc_pin())
+}
+
+fn resolve_backlight_pin(profile: &HardwareProfile, config: &AppConfig) -> Option<u8> {
+    config
+        .backlight_pin_override
+        .or_else(|| profile.default_backlight_pin())
+}
+
+enum AnyDisplay {
+    St7789(St7789Display),
+    #[allow(dead_code)]
+    Ili9341(Ili9341Display),
+    LinuxFb(LinuxFbDisplay),
+}
+
+impl AnyDisplay {
+    fn draw_menu(&mut self, state: &MenuState) -> Result<()> {
+        match self {
+            Self::St7789(display) => display.draw_menu(state),
+            Self::Ili9341(display) => display.draw_menu(state),
+            Self::LinuxFb(display) => display.draw_menu(state),
+        }
+    }
+
+    fn draw_idle_screen(&mut self, state: &MenuState, hostname: &str) -> Result<()> {
+        match self {
+            Self::St7789(display) => display.draw_idle_screen(state, hostname),
+            Self::Ili9341(display) => display.draw_idle_screen(state, hostname),
+            Self::LinuxFb(display) => display.draw_idle_screen(state, hostname),
+        }
+    }
+
+    fn draw_powering_down_screen(&mut self) -> Result<()> {
+        match self {
+            Self::St7789(display) => display.draw_powering_down_screen(),
+            Self::Ili9341(display) => display.draw_powering_down_screen(),
+            Self::LinuxFb(display) => display.draw_powering_down_screen(),
+        }
+    }
+
+    fn clear_and_backlight_off(&mut self) -> Result<()> {
+        match self {
+            Self::St7789(display) => display.clear_and_backlight_off(),
+            Self::Ili9341(display) => display.clear_and_backlight_off(),
+            Self::LinuxFb(display) => display.clear_and_backlight_off(),
+        }
+    }
+}
+
+struct HardwareBuild {
+    profile: HardwareProfile,
+    display: AnyDisplay,
+    button_config: ButtonConfig,
+    alsa_device: Option<String>,
+    spi_device: String,
+    dc_pin: u8,
+    backlight_pin: Option<u8>,
+    #[allow(dead_code)]
+    power_latch: Option<rppal::gpio::OutputPin>,
+    joystick_reader: Option<JoystickButtonReader>,
+}
+
+fn build_hardware(config: &AppConfig) -> Result<HardwareBuild> {
+    let profile = HardwareProfile::from_str(&config.hardware_profile)?;
+    let spi_device = resolve_spi_device(&profile, config);
+    let dc_pin = resolve_dc_pin(&profile, config);
+    let backlight_pin = resolve_backlight_pin(&profile, config);
+    let button_config = profile.button_config()?;
+    let alsa_device = profile
+        .default_alsa_device()
+        .map(|device| device.to_string());
+
+    let (display, power_latch, joystick_reader) = match profile {
+        HardwareProfile::PirateAudio => {
+            let d = AnyDisplay::St7789(St7789Display::new(&spi_device, dc_pin, backlight_pin)?);
+            (d, None, None)
+        }
+        HardwareProfile::GpiCase => {
+            let d = AnyDisplay::LinuxFb(LinuxFbDisplay::new("/dev/fb0", 320, 240)?);
+            let gpio = rppal::gpio::Gpio::new().context("failed to open GPIO")?;
+            let latch = gpio
+                .get(27)
+                .context("failed to get BCM27 (power latch)")?
+                .into_output_high();
+            let joystick = JoystickButtonReader::new("/dev/input/js0")
+                .context("failed to open joystick /dev/input/js0")?;
+            (d, Some(latch), Some(joystick))
+        }
+    };
+
+    Ok(HardwareBuild {
+        profile,
+        display,
+        button_config,
+        alsa_device,
+        spi_device,
+        dc_pin,
+        backlight_pin,
+        power_latch,
+        joystick_reader,
+    })
+}
+
+fn request_shutdown(display: &mut AnyDisplay, audio_tx: &Sender<AudioCommand>) -> bool {
+    if let Err(err) = display.draw_powering_down_screen() {
+        warn!("failed to draw powering down screen: {err}");
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    if let Err(err) = audio_tx.send_timeout(AudioCommand::Stop, Duration::from_millis(200)) {
+        warn!("failed to send stop to audio thread before shutdown: {err}");
+    }
+    if let Err(err) = display.clear_and_backlight_off() {
+        warn!("failed to clear display before shutdown: {err}");
+    }
+
+    match std::process::Command::new("/sbin/shutdown")
+        .args(["-h", "now"])
+        .status()
+    {
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            warn!("/sbin/shutdown exited with non-zero status: {status}");
+            false
+        }
+        Err(err) => {
+            warn!("failed to invoke /sbin/shutdown: {err}");
+            false
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MidiEvent {
     NoteOn(u8),
     ControlChange { controller: u8, value: u8 },
@@ -696,7 +919,11 @@ fn initialize_midi() -> Result<Option<MidiRuntime>> {
     // Log all detected ports so users can debug mismatches.
     let port_names: Vec<String> = ports
         .iter()
-        .map(|p| midi_in.port_name(p).unwrap_or_else(|_| "unknown".to_string()))
+        .map(|p| {
+            midi_in
+                .port_name(p)
+                .unwrap_or_else(|_| "unknown".to_string())
+        })
         .collect();
     info!("detected MIDI input ports: {:?}", port_names);
 
@@ -757,14 +984,27 @@ fn main() -> Result<()> {
     };
     let midi_cents_cc = validate_midi_cc(config.midi_cents_cc)?;
     info!(
-        "audio config: sample_rate={} buffer_frames={} oscillators={} wavetable dir={} wav dir={} spi_device={}",
+        "audio config: sample_rate={} buffer_frames={} oscillators={} wavetable dir={} wav dir={} hardware_profile={} spi_device={}",
         config.sample_rate,
         config.buffer_frames,
         config.oscillators,
         config.wavetable_dir.display(),
         config.wav_dir.display(),
-        config.spi_device
+        config.hardware_profile,
+        config.spi_device.as_deref().unwrap_or("(profile default)")
     );
+
+    let HardwareBuild {
+        profile: hw_profile,
+        display: hw_display,
+        button_config: hw_button_config,
+        alsa_device: hw_alsa_device,
+        spi_device: hw_spi_device,
+        dc_pin: hw_dc_pin,
+        backlight_pin: hw_backlight_pin,
+        power_latch: _power_latch,
+        joystick_reader: mut hw_joystick_reader,
+    } = build_hardware(&config)?;
 
     let initial_bank = ui::BANK_NAMES
         .get(config.bank_index)
@@ -849,13 +1089,15 @@ fn main() -> Result<()> {
         AudioConfig {
             sample_rate: config.sample_rate,
             buffer_frames: config.buffer_frames,
+            device: hw_alsa_device.clone(),
         },
         audio_rx,
         visuals_level_tx,
     );
 
     info!("initializing button GPIO inputs");
-    let mut buttons = ButtonReader::new().context("failed to configure Pirate Audio buttons")?;
+    let mut buttons = ButtonReader::new(hw_button_config)
+        .context("failed to configure hardware button mapping")?;
     info!("button GPIO inputs initialized");
     let midi = match initialize_midi() {
         Ok(runtime) => runtime,
@@ -865,10 +1107,15 @@ fn main() -> Result<()> {
         }
     };
 
-    info!("initializing ST7789 display over {}", config.spi_device);
-    let mut display = St7789Display::new(&config.spi_device, 9, Some(13))
-        .context("failed to initialize ST7789 display")?;
-    info!("display initialized (DC=BCM9, backlight=BCM13)");
+    info!(
+        "initializing {:?} display over {}",
+        hw_profile, hw_spi_device
+    );
+    let mut display = hw_display;
+    info!(
+        "display initialized (DC=BCM{}, backlight={:?})",
+        hw_dc_pin, hw_backlight_pin
+    );
 
     info!("rendering initial menu frame");
     display.draw_menu(&menu)?;
@@ -883,45 +1130,20 @@ fn main() -> Result<()> {
     let mut idle_mode = false;
     const SHUTDOWN_HOLD_DURATION: Duration = Duration::from_secs(5);
     let mut shutdown_combo_start: Option<Instant> = None;
+    let mut raw_buf: Vec<bool> = Vec::with_capacity(4);
 
     loop {
         // Shutdown combo: Up + Down held together for 5 seconds triggers a safe shutdown.
         // Checked before the idle logic so the combo is not interrupted by the idle screen.
-        let raw = buttons.raw_states();
-        if raw[0] && raw[1] {
+        buttons.raw_states_into(&mut raw_buf);
+        if raw_buf.len() >= 2 && raw_buf[0] && raw_buf[1] {
             last_activity = Instant::now();
             match shutdown_combo_start {
                 None => shutdown_combo_start = Some(Instant::now()),
                 Some(start) if start.elapsed() >= SHUTDOWN_HOLD_DURATION => {
-                    if let Err(err) = display.draw_powering_down_screen() {
-                        warn!("failed to draw powering down screen: {err}");
-                    }
-                    std::thread::sleep(Duration::from_millis(500));
-                    // Stop audio and blank the display immediately so no audio or
-                    // stale pixels persist while the OS is halting.
-                    if let Err(err) = audio_tx.send_timeout(AudioCommand::Stop, Duration::from_millis(200)) {
-                        warn!("failed to send stop to audio thread before shutdown: {err}");
-                    }
-                    if let Err(err) = display.clear_and_backlight_off() {
-                        warn!("failed to clear display before shutdown: {err}");
-                    }
-                    let shutdown_failed = match std::process::Command::new("/sbin/shutdown")
-                        .args(["-h", "now"])
-                        .status()
-                    {
-                        Ok(status) if status.success() => {
-                            break;
-                        }
-                        Ok(status) => {
-                            warn!("/sbin/shutdown exited with non-zero status: {status}");
-                            true
-                        }
-                        Err(err) => {
-                            warn!("failed to invoke /sbin/shutdown: {err}");
-                            true
-                        }
-                    };
-                    if shutdown_failed {
+                    if request_shutdown(&mut display, &audio_tx) {
+                        break;
+                    } else {
                         shutdown_combo_start = None;
                         buttons.sync_state();
                         idle_mode = false;
@@ -940,6 +1162,21 @@ fn main() -> Result<()> {
             // Sync last-state so the next poll_pressed call does not see a spurious
             // rising edge from a button that was still held when the combo was cancelled.
             buttons.sync_state();
+        }
+
+        if buttons.poll_shutdown_pin() {
+            last_activity = Instant::now();
+            if request_shutdown(&mut display, &audio_tx) {
+                break;
+            }
+            buttons.sync_state();
+            idle_mode = false;
+            if let Err(draw_err) = display.draw_menu(&menu) {
+                warn!("failed to restore display after shutdown failure: {draw_err}");
+            }
+            synth.poll();
+            std::thread::sleep(Duration::from_millis(25));
+            continue;
         }
 
         // Idle timeout: switch to graphical overview screen
@@ -986,7 +1223,11 @@ fn main() -> Result<()> {
             }
         }
 
-        if let Some(button) = buttons.poll_pressed()? {
+        let joystick_button = hw_joystick_reader
+            .as_mut()
+            .and_then(|jr| jr.poll_pressed());
+        let button_press = buttons.poll_pressed()?.or(joystick_button);
+        if let Some(button) = button_press {
             last_activity = Instant::now();
 
             // If idle, any key wakes the display and resumes the menu
@@ -1032,7 +1273,10 @@ fn main() -> Result<()> {
             }
 
             if menu.scale_index != old_scale {
-                synth.stage_scale(scale_mode_from_index(menu.scale_index), menu.fine_tune_cents);
+                synth.stage_scale(
+                    scale_mode_from_index(menu.scale_index),
+                    menu.fine_tune_cents,
+                );
             }
 
             if menu.bank_index != old_bank {
@@ -1225,5 +1469,307 @@ mod tests {
         };
         let merged = apply_user_config(base, user);
         assert!((merged.note_transition_ms - 3000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_hardware_profile_pirate_audio_parses() {
+        let config: AppConfig = toml::from_str("hardware_profile = \"pirate-audio\"\n").unwrap();
+        assert_eq!(config.hardware_profile, "pirate-audio");
+        assert_eq!(
+            HardwareProfile::from_str("pirate-audio").unwrap(),
+            HardwareProfile::PirateAudio
+        );
+    }
+
+    #[test]
+    fn test_hardware_profile_gpi_case_parses() {
+        assert_eq!(
+            HardwareProfile::from_str("gpi-case").unwrap(),
+            HardwareProfile::GpiCase
+        );
+    }
+
+    #[test]
+    fn test_hardware_profile_unknown_returns_error() {
+        assert!(HardwareProfile::from_str("foobar").is_err());
+    }
+
+    #[test]
+    fn test_hardware_profile_default_is_pirate_audio() {
+        let config: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(config.hardware_profile, "pirate-audio");
+    }
+
+    #[test]
+    fn test_spi_device_override_respected() {
+        let profile = HardwareProfile::PirateAudio;
+
+        let default_cfg: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(
+            resolve_spi_device(&profile, &default_cfg),
+            "/dev/spidev0.1".to_string()
+        );
+
+        let override_cfg: AppConfig = toml::from_str("spi_device = \"/dev/spidev1.0\"\n").unwrap();
+        assert_eq!(
+            resolve_spi_device(&profile, &override_cfg),
+            "/dev/spidev1.0".to_string()
+        );
+    }
+
+    #[test]
+    fn test_spi_device_gpi_case_default() {
+        let profile = HardwareProfile::GpiCase;
+        let cfg: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(
+            resolve_spi_device(&profile, &cfg),
+            "/dev/spidev0.0".to_string()
+        );
+    }
+
+    #[test]
+    fn test_spi_device_explicit_pirate_audio_default_respected_for_gpi_case() {
+        // With the new Option<String> approach, explicitly setting spi_device to the
+        // pirate-audio global default "/dev/spidev0.1" is honoured even for GpiCase.
+        let profile = HardwareProfile::GpiCase;
+        let cfg: AppConfig = toml::from_str("spi_device = \"/dev/spidev0.1\"\n").unwrap();
+        assert_eq!(
+            resolve_spi_device(&profile, &cfg),
+            "/dev/spidev0.1".to_string(),
+            "explicit spi_device override must be respected regardless of profile"
+        );
+    }
+
+    #[test]
+    fn test_spi_device_none_in_default_config() {
+        let cfg = AppConfig::default();
+        assert!(cfg.spi_device.is_none(), "default AppConfig must have spi_device = None");
+    }
+
+    #[test]
+    fn test_hardware_profile_default_spi_device() {
+        assert_eq!(HardwareProfile::PirateAudio.default_spi_device(), "/dev/spidev0.1");
+        assert_eq!(HardwareProfile::GpiCase.default_spi_device(), "/dev/spidev0.0");
+    }
+
+    #[test]
+    fn test_hardware_profile_default_dc_pin() {
+        assert_eq!(resolve_dc_pin(&HardwareProfile::PirateAudio, &AppConfig::default()), 9);
+        assert_eq!(resolve_dc_pin(&HardwareProfile::GpiCase, &AppConfig::default()), 25);
+    }
+
+    #[test]
+    fn test_hardware_profile_dc_pin_override() {
+        let mut cfg = AppConfig::default();
+        cfg.dc_pin_override = Some(12);
+        assert_eq!(resolve_dc_pin(&HardwareProfile::PirateAudio, &cfg), 12);
+        assert_eq!(resolve_dc_pin(&HardwareProfile::GpiCase, &cfg), 12);
+    }
+
+    #[test]
+    fn test_hardware_profile_backlight_pin() {
+        assert_eq!(
+            resolve_backlight_pin(&HardwareProfile::PirateAudio, &AppConfig::default()),
+            Some(13)
+        );
+        assert_eq!(
+            resolve_backlight_pin(&HardwareProfile::GpiCase, &AppConfig::default()),
+            None
+        );
+    }
+
+    #[test]
+    fn test_hardware_profile_backlight_pin_override() {
+        let mut cfg = AppConfig::default();
+        cfg.backlight_pin_override = Some(22);
+        assert_eq!(resolve_backlight_pin(&HardwareProfile::PirateAudio, &cfg), Some(22));
+        assert_eq!(resolve_backlight_pin(&HardwareProfile::GpiCase, &cfg), Some(22));
+    }
+
+    #[test]
+    fn test_scale_mode_from_index_covers_all_variants() {
+        use engine::ScaleMode;
+        assert!(matches!(scale_mode_from_index(0), ScaleMode::None));
+        assert!(matches!(scale_mode_from_index(1), ScaleMode::Major));
+        assert!(matches!(scale_mode_from_index(2), ScaleMode::NaturalMinor));
+        assert!(matches!(scale_mode_from_index(3), ScaleMode::Pentatonic));
+        assert!(matches!(scale_mode_from_index(4), ScaleMode::Dorian));
+        assert!(matches!(scale_mode_from_index(5), ScaleMode::Mixolydian));
+        assert!(matches!(scale_mode_from_index(6), ScaleMode::WholeTone));
+        assert!(matches!(scale_mode_from_index(7), ScaleMode::Hirajoshi));
+        assert!(matches!(scale_mode_from_index(8), ScaleMode::Lydian));
+        // out-of-range falls back to None
+        assert!(matches!(scale_mode_from_index(99), ScaleMode::None));
+    }
+
+    #[test]
+    fn test_midi_note_to_menu_key_octave_boundary_cases() {
+        // Note 0 = C-1, clamped octave to 0
+        let (key, oct) = midi_note_to_menu_key_octave(0);
+        assert_eq!(key, 0);
+        assert_eq!(oct, 0);
+        // Note 127 = G9, octave clamped to 8
+        let (key, oct) = midi_note_to_menu_key_octave(127);
+        assert_eq!(key, 7);
+        assert_eq!(oct, 8);
+        // Middle C = note 60 = C4
+        let (key, oct) = midi_note_to_menu_key_octave(60);
+        assert_eq!(key, 0); // C
+        assert_eq!(oct, 4);
+    }
+
+    #[test]
+    fn test_parse_midi_event_note_off_ignored() {
+        // velocity 0 on note-on is treated as note-off; must return None
+        assert_eq!(parse_midi_event(&[0x90, 64, 0]), None);
+    }
+
+    #[test]
+    fn test_parse_midi_event_short_message_returns_none() {
+        assert_eq!(parse_midi_event(&[0x90, 64]), None);
+        assert_eq!(parse_midi_event(&[]), None);
+    }
+
+    #[test]
+    fn test_parse_midi_event_channel_mask_applied() {
+        // status byte 0x9F = note-on on channel 15; should still decode
+        assert_eq!(parse_midi_event(&[0x9F, 60, 80]), Some(MidiEvent::NoteOn(60)));
+    }
+
+    #[test]
+    fn test_granular_config_clamping() {
+        let mut cfg = AppConfig::default();
+        cfg.granular_channels = 0; // below minimum 1
+        cfg.granular_pitch_cents = -9999.0; // below minimum -2400
+        cfg.granular_position = 2.0; // above maximum 1.0
+        let gc = granular_config(&cfg);
+        assert_eq!(gc.granular_channels, 1, "granular_channels must be clamped to 1");
+        assert!(gc.granular_pitch_cents >= -2400.0, "pitch_cents must be clamped");
+        assert!(gc.position <= 1.0, "position must be clamped");
+    }
+
+    #[test]
+    fn test_apply_user_config_spi_device_override() {
+        let base = AppConfig::default();
+        assert!(base.spi_device.is_none());
+        let user = UserConfig {
+            spi_device: Some("/dev/spidev1.0".into()),
+            ..UserConfig::default()
+        };
+        let merged = apply_user_config(base, user);
+        assert_eq!(merged.spi_device.as_deref(), Some("/dev/spidev1.0"));
+    }
+
+    #[test]
+    fn test_apply_user_config_spi_device_none_preserves_base() {
+        let mut base = AppConfig::default();
+        base.spi_device = Some("/dev/spidev0.0".into());
+        let user = UserConfig {
+            spi_device: None,
+            ..UserConfig::default()
+        };
+        let merged = apply_user_config(base, user);
+        assert_eq!(merged.spi_device.as_deref(), Some("/dev/spidev0.0"));
+    }
+
+    // ── New tests for previously-uncovered lines ─────────────────────────────
+
+    #[test]
+    fn test_load_config_from_existing_file() {
+        let path = std::env::temp_dir().join("pirate_synth_test_load_config.toml");
+        std::fs::write(&path, "sample_rate = 22050\noscillators = 4\n").unwrap();
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.sample_rate, 22050);
+        assert_eq!(config.oscillators, 4);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_load_user_config_from_existing_file() {
+        let path =
+            std::env::temp_dir().join("pirate_synth_test_load_user_config.toml");
+        std::fs::write(&path, "oscillators = 3\nreverb_wet = 0.5\n").unwrap();
+        let result = load_user_config(&path).unwrap();
+        assert!(result.is_some(), "load_user_config must return Some when file exists");
+        let user = result.unwrap();
+        assert_eq!(user.oscillators, Some(3));
+        assert!((user.reverb_wet.unwrap() - 0.5).abs() < 0.001);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_load_user_config_missing_file_returns_none() {
+        let path = Path::new("/tmp/pirate_synth_user_config_definitely_absent.toml");
+        let result = load_user_config(path).unwrap();
+        assert!(result.is_none(), "load_user_config must return None for absent file");
+    }
+
+    #[test]
+    fn test_user_config_path_returns_some_when_home_set() {
+        if std::env::var_os("HOME").is_some() {
+            let path = user_config_path().expect("user_config_path must return Some when HOME is set");
+            assert!(
+                path.to_string_lossy().ends_with(".pirate-synth.toml"),
+                "user config path must end with .pirate-synth.toml"
+            );
+        }
+    }
+
+    #[test]
+    fn test_load_bank_uses_builtins_for_empty_dir() {
+        let tmp = std::env::temp_dir().join("pirate_synth_test_load_bank_empty");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let result = load_bank(&tmp, "nonexistent_bank", 1);
+        assert!(result.is_ok(), "load_bank must succeed with an empty dir (falls back to builtins)");
+        assert!(!result.unwrap().is_empty(), "load_bank must return at least one builtin wavetable");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_initialize_engine_with_empty_wavetable_dir() {
+        let tmp = std::env::temp_dir().join("pirate_synth_test_init_engine");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let mut cfg = AppConfig::default();
+        // Point wav_dir to a non-existent path so WAV loading is skipped
+        cfg.wav_dir = tmp.join("wav_nonexistent");
+        cfg.wavetable_dir = tmp.clone();
+        cfg.oscillators = 1;
+        let engine = initialize_engine(&cfg, "bank1");
+        assert!(engine.is_ok(), "initialize_engine must succeed using builtin wavetables");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_apply_engine_params_runs_without_panicking() {
+        let tmp = std::env::temp_dir().join("pirate_synth_test_apply_params");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let mut cfg = AppConfig::default();
+        cfg.wav_dir = tmp.join("wav_nonexistent");
+        cfg.wavetable_dir = tmp.clone();
+        cfg.oscillators = 1;
+        let mut engine = initialize_engine(&cfg, "bank1").unwrap();
+        let menu = MenuState::new(0.0, 4, 4);
+        apply_engine_params(&mut engine, &menu, &cfg);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_apply_engine_params_with_non_default_config() {
+        let tmp = std::env::temp_dir().join("pirate_synth_test_apply_params2");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let mut cfg = AppConfig::default();
+        cfg.wav_dir = tmp.join("wav_nonexistent");
+        cfg.wavetable_dir = tmp.clone();
+        cfg.oscillators = 1;
+        cfg.reverb_enabled = false;
+        cfg.tremolo_enabled = false;
+        cfg.fm_enabled = true;
+        cfg.fm_depth = 0.5;
+        cfg.granular_active = true;
+        let mut engine = initialize_engine(&cfg, "bank1").unwrap();
+        let mut menu = MenuState::new(0.0, 4, 4);
+        menu.fine_tune_cents = 50.0;
+        apply_engine_params(&mut engine, &menu, &cfg);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

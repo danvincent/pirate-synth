@@ -65,7 +65,6 @@ struct Oscillator {
     pub(crate) detune_ramp_rate: f32,
 }
 
-
 pub(crate) fn lcg_next(state: &mut u64) -> u32 {
     *state = state
         .wrapping_mul(6364136223846793005)
@@ -77,7 +76,6 @@ pub(crate) fn lcg_next(state: &mut u64) -> u32 {
 fn hann_window(phase: f32) -> f32 {
     0.5 * (1.0 - (std::f32::consts::TAU * phase).cos())
 }
-
 
 pub struct Engine {
     sample_rate: u32,
@@ -148,7 +146,6 @@ pub struct Engine {
     granular: Option<GranularState>,
 }
 
-
 impl Engine {
     pub fn new(
         sample_rate: u32,
@@ -184,7 +181,10 @@ impl Engine {
                 rng_state,
                 drift_lfo_phase: drift_lfo_start,
                 drift_lfo_rate_hz: drift_lfo_rate,
-                voice: Voice::new(std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2),
+                voice: Voice::new(
+                    std::f32::consts::FRAC_1_SQRT_2,
+                    std::f32::consts::FRAC_1_SQRT_2,
+                ),
                 tremolo_phase: tremolo_phase_start,
                 tremolo_rate_hz: tremolo_rate,
                 filter_lfo_phase: i as f32 / oscillator_count as f32,
@@ -304,13 +304,16 @@ impl Engine {
             for osc in &mut self.oscillators {
                 let jitter = 0.8 + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
                 osc.target_base_hz = hz;
-                osc.hz_ramp_rate = (hz - osc.current_base_hz).abs() / (base_secs * jitter * self.sample_rate as f32).max(1.0);
+                osc.hz_ramp_rate = (hz - osc.current_base_hz).abs()
+                    / (base_secs * jitter * self.sample_rate as f32).max(1.0);
             }
         }
     }
 
     pub fn frequency_pending(&self) -> bool {
-        self.oscillators.iter().any(|o| (o.current_base_hz - o.target_base_hz).abs() > 0.01)
+        self.oscillators
+            .iter()
+            .any(|o| (o.current_base_hz - o.target_base_hz).abs() > 0.01)
     }
 
     pub fn set_fine_tune_cents(&mut self, cents: f32) {
@@ -321,8 +324,8 @@ impl Engine {
         } else {
             let delta = (cents - self.fine_tune_cents).abs();
             let jitter = 0.8 + (lcg_next(&mut self.rng_state) as f32 / u32::MAX as f32) * 0.4;
-            self.cents_ramp_rate =
-                delta / ((self.note_transition_ms / 1000.0 * jitter) * self.sample_rate as f32).max(1.0);
+            self.cents_ramp_rate = delta
+                / ((self.note_transition_ms / 1000.0 * jitter) * self.sample_rate as f32).max(1.0);
             self.target_fine_tune_cents = cents;
         }
     }
@@ -411,7 +414,14 @@ impl Engine {
         self.reverb_even = Reverb::new_with_params(false, feedback, damp, comb_count);
     }
 
-    pub fn set_granular_reverb(&mut self, enabled: bool, wet: f32, feedback: f32, damp: f32, comb_count: usize) {
+    pub fn set_granular_reverb(
+        &mut self,
+        enabled: bool,
+        wet: f32,
+        feedback: f32,
+        damp: f32,
+        comb_count: usize,
+    ) {
         self.granular_reverb_enabled = enabled;
         self.granular_reverb_wet = wet.clamp(0.0, 1.0);
         self.granular_reverb_odd = Reverb::new_with_params(true, feedback, damp, comb_count);
@@ -567,8 +577,11 @@ impl Engine {
                         osc.detune_ratio = osc.target_detune_ratio;
                         osc.detune_ramp_rate = 0.0;
                     } else {
-                        let jitter = 0.8 + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
-                        osc.detune_ramp_rate = 1.0 / ((self.note_transition_ms / 1000.0 * jitter).max(0.001) * self.sample_rate as f32);
+                        let jitter =
+                            0.8 + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
+                        osc.detune_ramp_rate = 1.0
+                            / ((self.note_transition_ms / 1000.0 * jitter).max(0.001)
+                                * self.sample_rate as f32);
                     }
                 }
             }
@@ -616,13 +629,17 @@ impl Engine {
                         })
                         .unwrap_or(0.0);
 
-                    let jitter = 0.8 + (lcg_next(&mut self.oscillators[i].rng_state) as f32 / u32::MAX as f32) * 0.4;
+                    let jitter = 0.8
+                        + (lcg_next(&mut self.oscillators[i].rng_state) as f32 / u32::MAX as f32)
+                            * 0.4;
                     self.oscillators[i].target_detune_ratio = 2.0f32.powf(nearest_cents / 1200.0);
                     if self.note_transition_ms <= 0.0 {
                         self.oscillators[i].detune_ratio = self.oscillators[i].target_detune_ratio;
                         self.oscillators[i].detune_ramp_rate = 0.0;
                     } else {
-                        self.oscillators[i].detune_ramp_rate = 1.0 / ((self.note_transition_ms / 1000.0 * jitter).max(0.001) * self.sample_rate as f32);
+                        self.oscillators[i].detune_ramp_rate = 1.0
+                            / ((self.note_transition_ms / 1000.0 * jitter).max(0.001)
+                                * self.sample_rate as f32);
                     }
                 }
             }
@@ -656,9 +673,22 @@ impl Engine {
                 for (osc_idx, osc) in self.oscillators.iter().enumerate() {
                     if osc_idx % 2 == 1 {
                         // peek at current sample without advancing phase
-                        let cur_idx = (self.wavetable_offset + self.xfade_index_offset + osc.wt_offset + osc_idx) % table_count;
+                        let cur_idx = (self.wavetable_offset
+                            + self.xfade_index_offset
+                            + osc.wt_offset
+                            + osc_idx)
+                            % table_count;
                         let next_idx = (cur_idx + 1) % table_count;
-                        let s = sample_from_banks(&self.wavetables, &self.pending_wavetables, self.bank_blend, cur_idx, next_idx, osc.phase, self.xfade_t, self.crossfade_enabled);
+                        let s = sample_from_banks(
+                            &self.wavetables,
+                            &self.pending_wavetables,
+                            self.bank_blend,
+                            cur_idx,
+                            next_idx,
+                            osc.phase,
+                            self.xfade_t,
+                            self.crossfade_enabled,
+                        );
                         acc += s;
                     }
                 }
@@ -685,9 +715,20 @@ impl Engine {
                     }
                 }
 
-                let cur_idx = (self.wavetable_offset + self.xfade_index_offset + osc.wt_offset + osc_idx) % table_count;
+                let cur_idx =
+                    (self.wavetable_offset + self.xfade_index_offset + osc.wt_offset + osc_idx)
+                        % table_count;
                 let next_idx = (cur_idx + 1) % table_count;
-                let s = sample_from_banks(&self.wavetables, &self.pending_wavetables, self.bank_blend, cur_idx, next_idx, osc.phase, self.xfade_t, self.crossfade_enabled);
+                let s = sample_from_banks(
+                    &self.wavetables,
+                    &self.pending_wavetables,
+                    self.bank_blend,
+                    cur_idx,
+                    next_idx,
+                    osc.phase,
+                    self.xfade_t,
+                    self.crossfade_enabled,
+                );
                 let mut s = s;
 
                 // Apply tremolo if enabled
@@ -736,8 +777,10 @@ impl Engine {
                                 let st_idx =
                                     lcg_next(&mut osc.rng_state) as usize % semitones.len();
                                 let octave = lcg_next(&mut osc.rng_state) % 2;
-                                let cents = (semitones[st_idx] * 100) as f32 + (octave as f32 * 1200.0);
-                                let jitter = 0.8 + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
+                                let cents =
+                                    (semitones[st_idx] * 100) as f32 + (octave as f32 * 1200.0);
+                                let jitter = 0.8
+                                    + (lcg_next(&mut osc.rng_state) as f32 / u32::MAX as f32) * 0.4;
                                 osc.target_detune_ratio = 2.0f32.powf(cents / 1200.0);
                                 if self.note_transition_ms <= 0.0 {
                                     osc.detune_ratio = osc.target_detune_ratio;
@@ -756,9 +799,11 @@ impl Engine {
                 // Smoothly ramp detune_ratio toward target
                 if osc.detune_ramp_rate > 0.0 {
                     if osc.detune_ratio < osc.target_detune_ratio {
-                        osc.detune_ratio = (osc.detune_ratio + osc.detune_ramp_rate).min(osc.target_detune_ratio);
+                        osc.detune_ratio =
+                            (osc.detune_ratio + osc.detune_ramp_rate).min(osc.target_detune_ratio);
                     } else if osc.detune_ratio > osc.target_detune_ratio {
-                        osc.detune_ratio = (osc.detune_ratio - osc.detune_ramp_rate).max(osc.target_detune_ratio);
+                        osc.detune_ratio =
+                            (osc.detune_ratio - osc.detune_ramp_rate).max(osc.target_detune_ratio);
                     }
                 }
 
@@ -842,16 +887,20 @@ impl Engine {
 
             // Step fine_tune_cents toward target (rate set with jitter by set_fine_tune_cents)
             if self.fine_tune_cents < self.target_fine_tune_cents {
-                self.fine_tune_cents = (self.fine_tune_cents + self.cents_ramp_rate).min(self.target_fine_tune_cents);
+                self.fine_tune_cents =
+                    (self.fine_tune_cents + self.cents_ramp_rate).min(self.target_fine_tune_cents);
             } else if self.fine_tune_cents > self.target_fine_tune_cents {
-                self.fine_tune_cents = (self.fine_tune_cents - self.cents_ramp_rate).max(self.target_fine_tune_cents);
+                self.fine_tune_cents =
+                    (self.fine_tune_cents - self.cents_ramp_rate).max(self.target_fine_tune_cents);
             }
 
             // Step bank blend toward target (rate set with jitter by set_wavetable_bank)
             if self.bank_blend < self.bank_blend_target {
-                self.bank_blend = (self.bank_blend + self.bank_ramp_rate).min(self.bank_blend_target);
+                self.bank_blend =
+                    (self.bank_blend + self.bank_ramp_rate).min(self.bank_blend_target);
             } else if self.bank_blend > self.bank_blend_target {
-                self.bank_blend = (self.bank_blend - self.bank_ramp_rate).max(self.bank_blend_target);
+                self.bank_blend =
+                    (self.bank_blend - self.bank_ramp_rate).max(self.bank_blend_target);
             }
             // When fully transitioned, promote pending to current bank
             if self.bank_blend >= 1.0 && !self.pending_wavetables.is_empty() {
@@ -864,9 +913,11 @@ impl Engine {
             // Ramp granular gain toward target (5-second fade)
             let granular_fade_rate = 1.0 / (5.0 * self.sample_rate as f32);
             if self.granular_gain < self.granular_target_gain {
-                self.granular_gain = (self.granular_gain + granular_fade_rate).min(self.granular_target_gain);
+                self.granular_gain =
+                    (self.granular_gain + granular_fade_rate).min(self.granular_target_gain);
             } else if self.granular_gain > self.granular_target_gain {
-                self.granular_gain = (self.granular_gain - granular_fade_rate).max(self.granular_target_gain);
+                self.granular_gain =
+                    (self.granular_gain - granular_fade_rate).max(self.granular_target_gain);
             }
 
             let gain = 0.25f32 / self.oscillators.len() as f32;
@@ -933,8 +984,10 @@ impl Engine {
             );
             granular.samples_until_next_grain += spawn_interval_samples;
             // Apply jitter so successive grains don't fire at a rigid interval.
-            let jitter_range = granular.config.spawn_jitter.clamp(0.0, 1.0) * spawn_interval_samples;
-            let jitter_val = (lcg_next(&mut granular.rng_state) as f32 / u32::MAX as f32) * 2.0 - 1.0;
+            let jitter_range =
+                granular.config.spawn_jitter.clamp(0.0, 1.0) * spawn_interval_samples;
+            let jitter_val =
+                (lcg_next(&mut granular.rng_state) as f32 / u32::MAX as f32) * 2.0 - 1.0;
             granular.samples_until_next_grain += jitter_val * jitter_range;
         }
 
@@ -958,7 +1011,9 @@ impl Engine {
             if grain.window_source_samples >= 2
                 && grain.sample_offset >= grain.window_source_samples as f32
             {
-                grain.sample_offset = grain.sample_offset.rem_euclid(grain.window_source_samples as f32);
+                grain.sample_offset = grain
+                    .sample_offset
+                    .rem_euclid(grain.window_source_samples as f32);
                 // Jump to a fresh random position within [position, position + position_jitter]
                 // so every window loop plays a different part of the source.
                 let rnd = lcg_next(&mut grain.rng_state) as f32 / u32::MAX as f32;
@@ -978,8 +1033,12 @@ impl Engine {
             // Apply Hann window within the window loop to eliminate clicks at wrap boundaries.
             // window_phase goes 0.0 → 1.0 across grain.window_source_samples.
             // At both boundaries (phase 0.0 and 1.0), Hann envelope = 0.0, making wraps inaudible.
-            debug_assert!(grain.window_source_samples >= 1, "window_source_samples must be >= 1 to avoid NaN");
-            let window_phase = (grain.sample_offset / grain.window_source_samples as f32).clamp(0.0, 1.0);
+            debug_assert!(
+                grain.window_source_samples >= 1,
+                "window_source_samples must be >= 1 to avoid NaN"
+            );
+            let window_phase =
+                (grain.sample_offset / grain.window_source_samples as f32).clamp(0.0, 1.0);
             let window_env = hann_window(window_phase);
             let sample = sample_linear(&source.samples, pos) * life_env * window_env;
             let source_gain = granular.source_voices[grain.source_index].gain;
@@ -1032,15 +1091,14 @@ fn key_to_semitone(key: &str) -> Result<u8> {
     Ok(value)
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::granular::GranularChannel;
-    use std::{fs, path::Path};
+    use super::*;
     use approx::{assert_relative_eq, relative_eq};
     use std::collections::HashSet;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{fs, path::Path};
 
     fn test_granular_sources(count: usize) -> Vec<GranularSource> {
         (0..count)
@@ -1335,7 +1393,8 @@ mod tests {
             sample_rate: 44100,
             samples: vec![0.5f32; 8192],
         };
-        let mut engine = Engine::new_granular(44100, 4, vec![source], GranularConfig::default()).unwrap();
+        let mut engine =
+            Engine::new_granular(44100, 4, vec![source], GranularConfig::default()).unwrap();
         engine.set_granular_reverb(false, 0.5, 0.84, 0.20, 4);
         assert!(!engine.granular_reverb_enabled);
     }
@@ -1348,7 +1407,8 @@ mod tests {
             sample_rate: 44100,
             samples: vec![0.5f32; 8192],
         };
-        let mut engine = Engine::new_granular(44100, 4, vec![source], GranularConfig::default()).unwrap();
+        let mut engine =
+            Engine::new_granular(44100, 4, vec![source], GranularConfig::default()).unwrap();
         engine.set_granular_reverb(true, 0.0, 0.84, 0.20, 4);
         assert_eq!(engine.granular_reverb_wet, 0.0);
     }
@@ -1361,7 +1421,8 @@ mod tests {
             sample_rate: 44100,
             samples: vec![0.5f32; 8192],
         };
-        let mut engine = Engine::new_granular(44100, 4, vec![source], GranularConfig::default()).unwrap();
+        let mut engine =
+            Engine::new_granular(44100, 4, vec![source], GranularConfig::default()).unwrap();
         engine.set_granular_reverb(true, 0.6, 0.88, 0.12, 8);
         assert!(engine.granular_reverb_enabled);
         assert!((engine.granular_reverb_wet - 0.6).abs() < 1e-5);
@@ -1512,7 +1573,10 @@ mod tests {
         engine.set_frequency_scheduled(880.0);
         let mut out = vec![0i16; 4];
         engine.render_i16_stereo(&mut out);
-        assert!(!engine.frequency_pending(), "0ms glide should resolve immediately");
+        assert!(
+            !engine.frequency_pending(),
+            "0ms glide should resolve immediately"
+        );
     }
 
     #[test]
@@ -1524,7 +1588,10 @@ mod tests {
         engine.set_frequency_scheduled(880.0);
         let mut out = vec![0i16; 4];
         engine.render_i16_stereo(&mut out);
-        assert!(!engine.frequency_pending(), "0ms glide should resolve immediately");
+        assert!(
+            !engine.frequency_pending(),
+            "0ms glide should resolve immediately"
+        );
     }
 
     #[test]
@@ -1538,13 +1605,21 @@ mod tests {
         // At 500ms base with 0.8 jitter min: worst case is 500/0.8 = 625ms = 30000 frames
         let mut out = vec![0i16; 32_000 * 2];
         engine.render_i16_stereo(&mut out);
-        assert!(!engine.frequency_pending(), "glide should complete within 1.5× transition window");
+        assert!(
+            !engine.frequency_pending(),
+            "glide should complete within 1.5× transition window"
+        );
     }
 
     #[test]
     fn frequency_glide_voices_stagger() {
         let table = default_sine_wavetable();
-        let mut engine = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table]).unwrap();
+        let mut engine = Engine::new(
+            48_000,
+            4,
+            vec![table.clone(), table.clone(), table.clone(), table],
+        )
+        .unwrap();
         engine.set_frequency(220.0);
         engine.set_note_transition_ms(2000.0);
         engine.set_frequency_scheduled(880.0);
@@ -1555,7 +1630,10 @@ mod tests {
         engine.render_i16_stereo(&mut out);
         // With jitter the ramp rate varies; just assert the glide is still in progress after 100ms
         // (2000ms total — definitely not done)
-        assert!(engine.frequency_pending(), "2000ms glide should still be in progress at 100ms");
+        assert!(
+            engine.frequency_pending(),
+            "2000ms glide should still be in progress at 100ms"
+        );
     }
 
     #[test]
@@ -1574,7 +1652,10 @@ mod tests {
         // Render enough to complete the new glide (1000ms + jitter buffer)
         let mut out = vec![0i16; 64_000 * 2];
         engine.render_i16_stereo(&mut out);
-        assert!(!engine.frequency_pending(), "interrupted glide should eventually reach new target");
+        assert!(
+            !engine.frequency_pending(),
+            "interrupted glide should eventually reach new target"
+        );
     }
 
     #[test]
@@ -2614,7 +2695,10 @@ mod tests {
         engine.render_i16_stereo(&mut buf);
         let mag_loud = buf.iter().map(|&s| (s as f32).abs()).sum::<f32>();
 
-        assert!(mag_loud > mag_silent, "immediate activation should produce louder output");
+        assert!(
+            mag_loud > mag_silent,
+            "immediate activation should produce louder output"
+        );
     }
 
     #[test]
@@ -2757,7 +2841,12 @@ mod tests {
     #[test]
     fn scale_transition_uses_note_transition_ms() {
         let table = default_sine_wavetable();
-        let mut engine = Engine::new(48_000, 4, vec![table.clone(), table.clone(), table.clone(), table]).unwrap();
+        let mut engine = Engine::new(
+            48_000,
+            4,
+            vec![table.clone(), table.clone(), table.clone(), table],
+        )
+        .unwrap();
         engine.set_frequency(440.0);
         engine.set_note_transition_ms(1000.0);
         engine.set_scale(ScaleMode::Major, 50.0);
@@ -2765,7 +2854,10 @@ mod tests {
         let mut out = vec![0i16; 57_600 * 2];
         engine.render_i16_stereo(&mut out);
         // Engine should still produce audio (not stuck or silent due to a bad ramp rate)
-        assert!(out.iter().any(|&s| s != 0), "engine should still produce audio after scale transition");
+        assert!(
+            out.iter().any(|&s| s != 0),
+            "engine should still produce audio after scale transition"
+        );
     }
 
     #[test]
@@ -2787,21 +2879,21 @@ mod tests {
     fn transition_secs_only_affects_bank() {
         let table = default_sine_wavetable();
         let mut engine = Engine::new(48_000, 2, vec![table.clone(), table]).unwrap();
-        
+
         engine.set_note_transition_ms(500.0);
         engine.set_transition_secs(10.0);
         engine.set_fine_tune_cents(100.0);
         let rate_with_10s = engine.cents_ramp_rate;
-        
+
         // Render to allow fine_tune_cents to progress towards target before next transition
-        let mut out = vec![0i16; 2_400];  // 50ms of audio
+        let mut out = vec![0i16; 2_400]; // 50ms of audio
         engine.render_i16_stereo(&mut out);
-        
+
         // Now change transition_secs and set a new target with a fresh delta
         engine.set_transition_secs(0.1);
-        engine.set_fine_tune_cents(50.0);  // delta = |50 - (progressed value)| > 0
+        engine.set_fine_tune_cents(50.0); // delta = |50 - (progressed value)| > 0
         let rate_with_0_1s = engine.cents_ramp_rate;
-        
+
         // Both rates are driven by note_transition_ms (500ms), not transition_secs.
         // Even with different deltas, they should both be reasonable.
         // Just verify both are non-zero (not zero delta) and in the same ballpark.
@@ -2862,7 +2954,10 @@ mod tests {
         let dry = 1.0 - wet;
         let processed_l = dry * input + wet * mono_out;
         let processed_r = dry * input + wet * mono_out;
-        assert_eq!(processed_l, processed_r, "symmetric input should yield symmetric output with mono reverb send");
+        assert_eq!(
+            processed_l, processed_r,
+            "symmetric input should yield symmetric output with mono reverb send"
+        );
     }
 
     #[test]
@@ -2898,7 +2993,10 @@ mod tests {
         engine.render_i16_stereo(&mut out);
 
         // Find peak absolute amplitude
-        let peak = out.iter().map(|s| ((*s as f32) / 32768.0).abs()).fold(0.0, f32::max);
+        let peak = out
+            .iter()
+            .map(|s| ((*s as f32) / 32768.0).abs())
+            .fold(0.0, f32::max);
 
         // With fixed code: divide by 1–2 grains → peak >= 0.3 ✓
         // With buggy code: divide by 16 → peak ≈ 0.05 ✗
@@ -2948,10 +3046,7 @@ mod tests {
 
         // Compute mean absolute value for early phase
         let mean_abs = |buf: &[i16]| {
-            buf.iter()
-                .map(|s| (*s as f32 / 32768.0).abs())
-                .sum::<f32>()
-                / buf.len() as f32
+            buf.iter().map(|s| (*s as f32 / 32768.0).abs()).sum::<f32>() / buf.len() as f32
         };
 
         let early_mean = mean_abs(&out_early);
@@ -3014,17 +3109,17 @@ mod tests {
 
         // Compute mean absolute value for early and late phases
         let mean_abs = |buf: &[i16]| {
-            buf.iter()
-                .map(|s| (*s as f32 / 32768.0).abs())
-                .sum::<f32>()
-                / buf.len() as f32
+            buf.iter().map(|s| (*s as f32 / 32768.0).abs()).sum::<f32>() / buf.len() as f32
         };
 
         let early_mean = mean_abs(&out_early);
         let late_mean = mean_abs(&out_late);
 
         // Verify amplitude ratio is close to 1.0 (stable amplitude)
-        assert!(early_mean > 0.0, "early phase produced silence — grain spawning may be broken");
+        assert!(
+            early_mean > 0.0,
+            "early phase produced silence — grain spawning may be broken"
+        );
         let ratio = late_mean / early_mean;
         assert!(
             ratio < 1.5,
@@ -3112,8 +3207,12 @@ mod tests {
         );
 
         // Verify output is not silent (should have audible content)
-        let mean_abs: f32 = samples_f32.iter().map(|s| s.abs()).sum::<f32>() / samples_f32.len() as f32;
-        assert!(mean_abs > 0.01, "output should not be silent; mean_abs = {mean_abs:.6}");
+        let mean_abs: f32 =
+            samples_f32.iter().map(|s| s.abs()).sum::<f32>() / samples_f32.len() as f32;
+        assert!(
+            mean_abs > 0.01,
+            "output should not be silent; mean_abs = {mean_abs:.6}"
+        );
     }
 
     // ── assign_channels edge-case coverage ──────────────────────────────────
@@ -3124,11 +3223,17 @@ mod tests {
         config.granular_channels = 4;
         let mut state = GranularState::new(test_granular_sources(2), config);
         // pre-populate to confirm clear happens
-        state.channels.push(super::granular::GranularChannel { detune_ratio: 1.0, source_index: 0 });
+        state.channels.push(super::granular::GranularChannel {
+            detune_ratio: 1.0,
+            source_index: 0,
+        });
 
         super::granular::assign_channels(&mut state, &config, 0, 0xaaaa);
 
-        assert!(state.channels.is_empty(), "channels must be empty when n_sources == 0");
+        assert!(
+            state.channels.is_empty(),
+            "channels must be empty when n_sources == 0"
+        );
         assert_eq!(state.channel_counter, 0);
     }
 
@@ -3137,11 +3242,17 @@ mod tests {
         let mut config = GranularConfig::default();
         config.granular_channels = 0;
         let mut state = GranularState::new(test_granular_sources(2), config);
-        state.channels.push(super::granular::GranularChannel { detune_ratio: 1.0, source_index: 0 });
+        state.channels.push(super::granular::GranularChannel {
+            detune_ratio: 1.0,
+            source_index: 0,
+        });
 
         super::granular::assign_channels(&mut state, &config, 2, 0xbbbb);
 
-        assert!(state.channels.is_empty(), "channels must be empty when granular_channels == 0");
+        assert!(
+            state.channels.is_empty(),
+            "channels must be empty when granular_channels == 0"
+        );
     }
 
     #[test]
@@ -3157,7 +3268,10 @@ mod tests {
 
         assert_eq!(state.channels.len(), 6);
         assert!(
-            state.channels.iter().all(|ch| relative_eq!(ch.detune_ratio, 1.0, epsilon = 1e-6)),
+            state
+                .channels
+                .iter()
+                .all(|ch| relative_eq!(ch.detune_ratio, 1.0, epsilon = 1e-6)),
             "all channels must have unity detune when ScaleMode::None"
         );
     }
@@ -3183,7 +3297,10 @@ mod tests {
 
         assert_eq!(state.channels.len(), 4);
         assert!(
-            state.channels.iter().all(|ch| relative_eq!(ch.detune_ratio, 1.0, epsilon = 1e-6)),
+            state
+                .channels
+                .iter()
+                .all(|ch| relative_eq!(ch.detune_ratio, 1.0, epsilon = 1e-6)),
             "all channels must have unity detune when pitch_cents == 0"
         );
     }
@@ -3211,8 +3328,7 @@ mod tests {
 
         let new_count = engine.granular.as_ref().unwrap().channels.len();
         assert_eq!(
-            new_count,
-            new_config.granular_channels,
+            new_count, new_config.granular_channels,
             "set_granular_config must refresh channel count"
         );
     }
@@ -3266,7 +3382,9 @@ mod tests {
         assert_eq!(g.config.scale_mode, ScaleMode::None);
         // With ScaleMode::None semitones is empty → all channels have unity detune
         assert!(
-            g.channels.iter().all(|ch| relative_eq!(ch.detune_ratio, 1.0, epsilon = 1e-6)),
+            g.channels
+                .iter()
+                .all(|ch| relative_eq!(ch.detune_ratio, 1.0, epsilon = 1e-6)),
             "ScaleMode::None must produce unity detune on all channels"
         );
     }

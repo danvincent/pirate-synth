@@ -12,10 +12,15 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "MIT"
-version = "0.1.0"
+version = "0.2.0"
+authors = ["Daniel Vincent"]
+description = "A drone synth for 32 Raspberry Pis running with Pirate Audio or GPI Case hardware"
+documentation = "https://github.com/danvincent/pirate-audio"
 
 [workspace.dependencies]
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 thiserror = "2"
+libc = "0.2"
+log = "0.4"
