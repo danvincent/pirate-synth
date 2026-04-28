@@ -6,6 +6,13 @@ use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::io::AsRawFd;
 
+// Linux VT ioctl constants (from <linux/kd.h>).
+// KDSETMODE switches the virtual terminal between text (KD_TEXT) and
+// graphics mode (KD_GRAPHICS) so fbcon does not overwrite our framebuffer.
+const KDSETMODE: libc::c_ulong = 0x4B3A;
+const KD_GRAPHICS: libc::c_int = 1;
+const KD_TEXT: libc::c_int = 0;
+
 pub struct LinuxFbDisplay {
     file: std::fs::File,
     width: u16,
@@ -24,17 +31,15 @@ impl LinuxFbDisplay {
 
         // Put the VT into graphics mode so fbcon stops writing to our framebuffer.
         // Best-effort: if we can't open /dev/tty0 (e.g. no permissions), we proceed anyway.
-        const KDSETMODE: libc::c_ulong = 0x4B3A;
-        const KD_GRAPHICS: libc::c_int = 1;
         let tty = OpenOptions::new()
             .read(true)
             .write(true)
             .open("/dev/tty0")
             .ok();
         if let Some(ref tty_file) = tty {
-            unsafe {
-                libc::ioctl(tty_file.as_raw_fd(), KDSETMODE, KD_GRAPHICS);
-            }
+            // SAFETY: tty_file fd is valid and owned; KDSETMODE is a standard Linux VT ioctl.
+            // Failure is non-fatal (e.g. no /dev/tty0 access), so the result is discarded.
+            let _ = unsafe { libc::ioctl(tty_file.as_raw_fd(), KDSETMODE, KD_GRAPHICS) };
         }
 
         Ok(Self {
@@ -86,11 +91,17 @@ impl LinuxFbDisplay {
         let mut fb = Framebuffer::new(self.width, self.height);
         fb.clear(0x0000);
         let fb_width = fb.width() as i32;
+        // text_width_2x computes the rendered width of text in draw_text_2x (18px stride,
+        // 1px inter-character spacing removed from the trailing glyph).
+        let text_width_2x = |text: &str| -> i32 {
+            let chars = text.chars().count() as i32;
+            if chars == 0 { 0 } else { chars * 18 - 2 }
+        };
         let line1 = "Powering";
-        let line1_x = (fb_width - line1.chars().count() as i32 * 18) / 2;
+        let line1_x = (fb_width - text_width_2x(line1)) / 2;
         fb.draw_text_2x(line1_x, 96, line1, 0xF800, 0x0000);
         let line2 = "down";
-        let line2_x = (fb_width - line2.chars().count() as i32 * 18) / 2;
+        let line2_x = (fb_width - text_width_2x(line2)) / 2;
         fb.draw_text_2x(line2_x, 122, line2, 0xF800, 0x0000);
         self.write_framebuffer(fb.as_bytes())
     }
@@ -105,12 +116,10 @@ impl LinuxFbDisplay {
 impl Drop for LinuxFbDisplay {
     fn drop(&mut self) {
         // Restore the VT to text mode when the display is dropped.
-        const KDSETMODE: libc::c_ulong = 0x4B3A;
-        const KD_TEXT: libc::c_int = 0;
         if let Some(ref tty_file) = self.tty {
-            unsafe {
-                libc::ioctl(tty_file.as_raw_fd(), KDSETMODE, KD_TEXT);
-            }
+            // SAFETY: tty_file fd is valid and owned; KDSETMODE is a standard Linux VT ioctl.
+            // Failure during drop is non-fatal, so the result is discarded.
+            let _ = unsafe { libc::ioctl(tty_file.as_raw_fd(), KDSETMODE, KD_TEXT) };
         }
     }
 }
