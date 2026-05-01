@@ -157,11 +157,6 @@ mod tests {
             TempFile(path)
         }
 
-        #[allow(dead_code)]
-        fn path(&self) -> &std::path::Path {
-            &self.0
-        }
-
         fn open_reader(&self) -> JoystickButtonReader {
             JoystickButtonReader::new(self.0.to_str().unwrap())
                 .expect("JoystickButtonReader::new must succeed with a readable file")

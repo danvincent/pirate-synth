@@ -127,18 +127,12 @@ impl MenuState {
             }
             Button::Select | Button::Right => self.increment_selected_value(),
             Button::Back | Button::Left => self.decrement_selected_value(),
-            Button::ToggleWt => self.oscillators_active = !self.oscillators_active,
-            Button::ToggleGranular => self.granular_active = !self.granular_active,
-            Button::NoteUp => self.key_index = (self.key_index + 1) % KEY_NAMES.len(),
-            Button::NoteDown => {
-                if self.key_index == 0 {
-                    self.key_index = KEY_NAMES.len() - 1;
-                } else {
-                    self.key_index -= 1;
-                }
-            }
-            Button::BankCycle => self.bank_index = (self.bank_index + 1) % BANK_NAMES.len(),
-            Button::ScaleCycle => self.scale_index = (self.scale_index + 1) % SCALE_NAMES.len(),
+            Button::ToggleWt => self.toggle_wt(),
+            Button::ToggleGranular => self.toggle_gr(),
+            Button::NoteUp => self.key_up(),
+            Button::NoteDown => self.key_down(),
+            Button::BankCycle => self.bank_next(),
+            Button::ScaleCycle => self.scale_next(),
         }
 
         // Adjust scroll offset to keep selected_item visible
@@ -149,15 +143,43 @@ impl MenuState {
         }
     }
 
+    fn toggle_wt(&mut self) {
+        self.oscillators_active ^= true;
+    }
+
+    fn toggle_gr(&mut self) {
+        self.granular_active ^= true;
+    }
+
+    fn key_up(&mut self) {
+        self.key_index = (self.key_index + 1) % KEY_NAMES.len();
+    }
+
+    fn key_down(&mut self) {
+        if self.key_index == 0 {
+            self.key_index = KEY_NAMES.len() - 1;
+        } else {
+            self.key_index -= 1;
+        }
+    }
+
+    fn bank_next(&mut self) {
+        self.bank_index = (self.bank_index + 1) % BANK_NAMES.len();
+    }
+
+    fn scale_next(&mut self) {
+        self.scale_index = (self.scale_index + 1) % SCALE_NAMES.len();
+    }
+
     fn increment_selected_value(&mut self) {
         match self.selected_item {
-            0 => self.oscillators_active = !self.oscillators_active,
-            1 => self.granular_active = !self.granular_active,
-            2 => self.key_index = (self.key_index + 1) % KEY_NAMES.len(),
-            3 => self.scale_index = (self.scale_index + 1) % SCALE_NAMES.len(),
+            0 => self.toggle_wt(),
+            1 => self.toggle_gr(),
+            2 => self.key_up(),
+            3 => self.scale_next(),
             4 => self.octave = (self.octave + 1).min(8),
             5 => self.stereo_spread = (self.stereo_spread + 5).min(100),
-            6 => self.bank_index = (self.bank_index + 1) % BANK_NAMES.len(),
+            6 => self.bank_next(),
             7 => self.wt_volume = (self.wt_volume + 10).min(100),
             8 => self.gr_volume = (self.gr_volume + 10).min(100),
             9 => self.fine_tune_cents = (self.fine_tune_cents + 1.0).min(100.0),
@@ -173,15 +195,9 @@ impl MenuState {
 
     fn decrement_selected_value(&mut self) {
         match self.selected_item {
-            0 => self.oscillators_active = !self.oscillators_active,
-            1 => self.granular_active = !self.granular_active,
-            2 => {
-                if self.key_index == 0 {
-                    self.key_index = KEY_NAMES.len() - 1;
-                } else {
-                    self.key_index -= 1;
-                }
-            }
+            0 => self.toggle_wt(),
+            1 => self.toggle_gr(),
+            2 => self.key_down(),
             3 => {
                 if self.scale_index == 0 {
                     self.scale_index = SCALE_NAMES.len() - 1;
