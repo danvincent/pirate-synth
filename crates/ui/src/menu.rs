@@ -28,6 +28,18 @@ pub enum Button {
     Back,
     Left,
     Right,
+    /// Toggle wavetable oscillators on/off (GPi CASE Select button)
+    ToggleWt,
+    /// Toggle granular engine on/off (GPi CASE Start button)
+    ToggleGranular,
+    /// Step note/key up by one semitone (GPi CASE A button)
+    NoteUp,
+    /// Step note/key down by one semitone (GPi CASE B button)
+    NoteDown,
+    /// Cycle wavetable bank forward (GPi CASE X button)
+    BankCycle,
+    /// Cycle scale forward (GPi CASE Y button)
+    ScaleCycle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +127,18 @@ impl MenuState {
             }
             Button::Select | Button::Right => self.increment_selected_value(),
             Button::Back | Button::Left => self.decrement_selected_value(),
+            Button::ToggleWt => self.oscillators_active = !self.oscillators_active,
+            Button::ToggleGranular => self.granular_active = !self.granular_active,
+            Button::NoteUp => self.key_index = (self.key_index + 1) % KEY_NAMES.len(),
+            Button::NoteDown => {
+                if self.key_index == 0 {
+                    self.key_index = KEY_NAMES.len() - 1;
+                } else {
+                    self.key_index -= 1;
+                }
+            }
+            Button::BankCycle => self.bank_index = (self.bank_index + 1) % BANK_NAMES.len(),
+            Button::ScaleCycle => self.scale_index = (self.scale_index + 1) % SCALE_NAMES.len(),
         }
 
         // Adjust scroll offset to keep selected_item visible
