@@ -12,7 +12,15 @@ const JS_EVENT_INIT: u8 = 0x80;
 /// Reads D-pad and button events from a Linux joystick device (`/dev/input/js0`).
 ///
 /// Uses the joystick API (8-byte `js_event` structs) in non-blocking mode.
-/// Maps D-pad axes and Start/Select buttons to the `Button` enum.
+///
+/// Button mapping:
+/// - D-pad: Axis 6 (Left/Right), Axis 7 (Up/Down)
+/// - Button 0 → `NoteUp` (A)
+/// - Button 1 → `NoteDown` (B)
+/// - Button 2 → `BankCycle` (X)
+/// - Button 3 → `ScaleCycle` (Y)
+/// - Button 6 → `ToggleWt` (Select)
+/// - Button 7 → `ToggleGranular` (Start)
 pub struct JoystickButtonReader {
     file: std::fs::File,
 }

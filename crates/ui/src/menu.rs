@@ -144,11 +144,11 @@ impl MenuState {
     }
 
     fn toggle_wt(&mut self) {
-        self.oscillators_active ^= true;
+        self.oscillators_active = !self.oscillators_active;
     }
 
     fn toggle_gr(&mut self) {
-        self.granular_active ^= true;
+        self.granular_active = !self.granular_active;
     }
 
     fn key_up(&mut self) {
