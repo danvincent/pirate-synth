@@ -542,4 +542,99 @@ mod tests {
             "line 12 should show the selected algo name"
         );
     }
+
+    #[test]
+    fn button_toggle_wt_turns_oscillators_off() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.oscillators_active = true;
+        menu.apply_button(Button::ToggleWt);
+        assert_eq!(menu.oscillators_active, false);
+    }
+
+    #[test]
+    fn button_toggle_wt_turns_oscillators_back_on() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.oscillators_active = true;
+        menu.apply_button(Button::ToggleWt);
+        menu.apply_button(Button::ToggleWt);
+        assert_eq!(menu.oscillators_active, true);
+    }
+
+    #[test]
+    fn button_toggle_granular_turns_granular_on() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.apply_button(Button::ToggleGranular);
+        assert_eq!(menu.granular_active, true);
+    }
+
+    #[test]
+    fn button_toggle_granular_turns_granular_off() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.apply_button(Button::ToggleGranular);
+        menu.apply_button(Button::ToggleGranular);
+        assert_eq!(menu.granular_active, false);
+    }
+
+    #[test]
+    fn button_note_up_increments_key_index() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.key_index = 0;
+        menu.apply_button(Button::NoteUp);
+        assert_eq!(menu.key_index, 1);
+    }
+
+    #[test]
+    fn button_note_up_wraps_at_last_key() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.key_index = KEY_NAMES.len() - 1;
+        menu.apply_button(Button::NoteUp);
+        assert_eq!(menu.key_index, 0);
+    }
+
+    #[test]
+    fn button_note_down_decrements_key_index() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.key_index = 5;
+        menu.apply_button(Button::NoteDown);
+        assert_eq!(menu.key_index, 4);
+    }
+
+    #[test]
+    fn button_note_down_wraps_at_zero() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.key_index = 0;
+        menu.apply_button(Button::NoteDown);
+        assert_eq!(menu.key_index, KEY_NAMES.len() - 1);
+    }
+
+    #[test]
+    fn button_bank_cycle_increments_bank_index() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.apply_button(Button::BankCycle);
+        assert_eq!(menu.bank_index, 1);
+    }
+
+    #[test]
+    fn button_bank_cycle_wraps_at_last_bank() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.bank_index = BANK_NAMES.len() - 1;
+        menu.apply_button(Button::BankCycle);
+        assert_eq!(menu.bank_index, 0);
+    }
+
+    #[test]
+    fn button_scale_cycle_increments_scale_index() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.scale_index = 0;
+        menu.apply_button(Button::ScaleCycle);
+        assert_eq!(menu.scale_index, 1);
+    }
+
+    #[test]
+    fn button_scale_cycle_wraps_at_last_scale() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.scale_index = SCALE_NAMES.len() - 1;
+        menu.apply_button(Button::ScaleCycle);
+        assert_eq!(menu.scale_index, 0);
+    }
 }
