@@ -12,7 +12,15 @@ const JS_EVENT_INIT: u8 = 0x80;
 /// Reads D-pad and button events from a Linux joystick device (`/dev/input/js0`).
 ///
 /// Uses the joystick API (8-byte `js_event` structs) in non-blocking mode.
-/// Maps D-pad axes and Start/Select buttons to the `Button` enum.
+///
+/// Button mapping:
+/// - D-pad: Axis 6 (Left/Right), Axis 7 (Up/Down)
+/// - Button 0 → `NoteUp` (A)
+/// - Button 1 → `NoteDown` (B)
+/// - Button 2 → `BankCycle` (X)
+/// - Button 3 → `ScaleCycle` (Y)
+/// - Button 6 → `ToggleWt` (Select)
+/// - Button 7 → `ToggleGranular` (Start)
 pub struct JoystickButtonReader {
     file: std::fs::File,
 }
@@ -66,8 +74,12 @@ impl JoystickButtonReader {
                                 None // button release - ignore
                             } else {
                                 match number {
-                                    6 => Some(Button::Back),   // BTN_SELECT
-                                    7 => Some(Button::Select), // BTN_START
+                                    0 => Some(Button::NoteUp),         // A
+                                    1 => Some(Button::NoteDown),       // B
+                                    2 => Some(Button::BankCycle),      // X
+                                    3 => Some(Button::ScaleCycle),     // Y
+                                    6 => Some(Button::ToggleWt),       // BTN_SELECT
+                                    7 => Some(Button::ToggleGranular), // BTN_START
                                     _ => None,
                                 }
                             }
@@ -120,8 +132,12 @@ mod tests {
                     None
                 } else {
                     match number {
-                        6 => Some(Button::Back),
-                        7 => Some(Button::Select),
+                        0 => Some(Button::NoteUp),
+                        1 => Some(Button::NoteDown),
+                        2 => Some(Button::BankCycle),
+                        3 => Some(Button::ScaleCycle),
+                        6 => Some(Button::ToggleWt),
+                        7 => Some(Button::ToggleGranular),
                         _ => None,
                     }
                 }
@@ -147,10 +163,6 @@ mod tests {
             let path = env::temp_dir().join(format!("pirate_synth_joystick_{tag}.bin"));
             fs::write(&path, b"").expect("failed to create empty temp joystick file");
             TempFile(path)
-        }
-
-        fn path(&self) -> &std::path::Path {
-            &self.0
         }
 
         fn open_reader(&self) -> JoystickButtonReader {
@@ -196,15 +208,39 @@ mod tests {
     }
 
     #[test]
-    fn test_start_button_select() {
+    fn test_start_button_toggle_granular() {
         let buf = make_event(JS_EVENT_BUTTON, 7, 1);
-        assert_eq!(parse_event(&buf), Some(Button::Select));
+        assert_eq!(parse_event(&buf), Some(Button::ToggleGranular));
     }
 
     #[test]
-    fn test_select_button_back() {
+    fn test_select_button_toggle_wt() {
         let buf = make_event(JS_EVENT_BUTTON, 6, 1);
-        assert_eq!(parse_event(&buf), Some(Button::Back));
+        assert_eq!(parse_event(&buf), Some(Button::ToggleWt));
+    }
+
+    #[test]
+    fn test_a_button_note_up() {
+        let buf = make_event(JS_EVENT_BUTTON, 0, 1);
+        assert_eq!(parse_event(&buf), Some(Button::NoteUp));
+    }
+
+    #[test]
+    fn test_b_button_note_down() {
+        let buf = make_event(JS_EVENT_BUTTON, 1, 1);
+        assert_eq!(parse_event(&buf), Some(Button::NoteDown));
+    }
+
+    #[test]
+    fn test_x_button_bank_cycle() {
+        let buf = make_event(JS_EVENT_BUTTON, 2, 1);
+        assert_eq!(parse_event(&buf), Some(Button::BankCycle));
+    }
+
+    #[test]
+    fn test_y_button_scale_cycle() {
+        let buf = make_event(JS_EVENT_BUTTON, 3, 1);
+        assert_eq!(parse_event(&buf), Some(Button::ScaleCycle));
     }
 
     #[test]
@@ -222,7 +258,7 @@ mod tests {
 
     #[test]
     fn test_unhandled_button_ignored() {
-        let buf = make_event(JS_EVENT_BUTTON, 0, 1); // A button - not mapped
+        let buf = make_event(JS_EVENT_BUTTON, 10, 1); // unmapped button index
         assert_eq!(parse_event(&buf), None);
     }
 
@@ -273,7 +309,7 @@ mod tests {
         let event = make_event(JS_EVENT_BUTTON, 7, 1);
         let tmp = TempFile::create_with_events("start", &[event]);
         let mut reader = tmp.open_reader();
-        assert_eq!(reader.poll_pressed(), Some(Button::Select));
+        assert_eq!(reader.poll_pressed(), Some(Button::ToggleGranular));
     }
 
     #[test]
@@ -281,7 +317,7 @@ mod tests {
         let event = make_event(JS_EVENT_BUTTON, 6, 1);
         let tmp = TempFile::create_with_events("select", &[event]);
         let mut reader = tmp.open_reader();
-        assert_eq!(reader.poll_pressed(), Some(Button::Back));
+        assert_eq!(reader.poll_pressed(), Some(Button::ToggleWt));
     }
 
     #[test]
@@ -291,14 +327,14 @@ mod tests {
         let press = make_event(JS_EVENT_BUTTON, 7, 1);
         let tmp = TempFile::create_with_events("release", &[release, press]);
         let mut reader = tmp.open_reader();
-        // Release is skipped; press returns Select
-        assert_eq!(reader.poll_pressed(), Some(Button::Select));
+        // Release is skipped; press returns ToggleGranular
+        assert_eq!(reader.poll_pressed(), Some(Button::ToggleGranular));
     }
 
     #[test]
     fn test_joystick_poll_pressed_unmapped_button_drains_to_none() {
-        // Unmapped button (number=0) returns None (drains all events)
-        let event = make_event(JS_EVENT_BUTTON, 0, 1);
+        // Unmapped button (number=10) returns None (drains all events)
+        let event = make_event(JS_EVENT_BUTTON, 10, 1);
         let tmp = TempFile::create_with_events("unmapped", &[event]);
         let mut reader = tmp.open_reader();
         assert_eq!(reader.poll_pressed(), None);

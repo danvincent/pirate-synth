@@ -3312,8 +3312,6 @@ mod tests {
     #[test]
     fn assign_channels_should_produce_unity_detune_when_scale_has_single_note() {
         // A single-note scale has spread == 0 → the spread <= 0 branch is hit → semitone_offset = 0.0
-        #[derive(Clone, Copy, Debug, PartialEq)]
-        struct SingleNote;
         // Use a built-in scale that has identical min/max → Pentatonic has distinct notes,
         // so use a scale where all notes equal 0. Simulate this by using ScaleMode::None
         // is already tested; instead test with a scale that has spread == 0 by patching config

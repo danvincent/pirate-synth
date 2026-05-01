@@ -28,6 +28,18 @@ pub enum Button {
     Back,
     Left,
     Right,
+    /// Toggle wavetable oscillators on/off (GPi CASE Select button)
+    ToggleWt,
+    /// Toggle granular engine on/off (GPi CASE Start button)
+    ToggleGranular,
+    /// Step note/key up by one semitone (GPi CASE A button)
+    NoteUp,
+    /// Step note/key down by one semitone (GPi CASE B button)
+    NoteDown,
+    /// Cycle wavetable bank forward (GPi CASE X button)
+    BankCycle,
+    /// Cycle scale forward (GPi CASE Y button)
+    ScaleCycle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +127,12 @@ impl MenuState {
             }
             Button::Select | Button::Right => self.increment_selected_value(),
             Button::Back | Button::Left => self.decrement_selected_value(),
+            Button::ToggleWt => self.toggle_wt(),
+            Button::ToggleGranular => self.toggle_gr(),
+            Button::NoteUp => self.key_up(),
+            Button::NoteDown => self.key_down(),
+            Button::BankCycle => self.bank_next(),
+            Button::ScaleCycle => self.scale_next(),
         }
 
         // Adjust scroll offset to keep selected_item visible
@@ -125,15 +143,43 @@ impl MenuState {
         }
     }
 
+    fn toggle_wt(&mut self) {
+        self.oscillators_active = !self.oscillators_active;
+    }
+
+    fn toggle_gr(&mut self) {
+        self.granular_active = !self.granular_active;
+    }
+
+    fn key_up(&mut self) {
+        self.key_index = (self.key_index + 1) % KEY_NAMES.len();
+    }
+
+    fn key_down(&mut self) {
+        if self.key_index == 0 {
+            self.key_index = KEY_NAMES.len() - 1;
+        } else {
+            self.key_index -= 1;
+        }
+    }
+
+    fn bank_next(&mut self) {
+        self.bank_index = (self.bank_index + 1) % BANK_NAMES.len();
+    }
+
+    fn scale_next(&mut self) {
+        self.scale_index = (self.scale_index + 1) % SCALE_NAMES.len();
+    }
+
     fn increment_selected_value(&mut self) {
         match self.selected_item {
-            0 => self.oscillators_active = !self.oscillators_active,
-            1 => self.granular_active = !self.granular_active,
-            2 => self.key_index = (self.key_index + 1) % KEY_NAMES.len(),
-            3 => self.scale_index = (self.scale_index + 1) % SCALE_NAMES.len(),
+            0 => self.toggle_wt(),
+            1 => self.toggle_gr(),
+            2 => self.key_up(),
+            3 => self.scale_next(),
             4 => self.octave = (self.octave + 1).min(8),
             5 => self.stereo_spread = (self.stereo_spread + 5).min(100),
-            6 => self.bank_index = (self.bank_index + 1) % BANK_NAMES.len(),
+            6 => self.bank_next(),
             7 => self.wt_volume = (self.wt_volume + 10).min(100),
             8 => self.gr_volume = (self.gr_volume + 10).min(100),
             9 => self.fine_tune_cents = (self.fine_tune_cents + 1.0).min(100.0),
@@ -149,15 +195,9 @@ impl MenuState {
 
     fn decrement_selected_value(&mut self) {
         match self.selected_item {
-            0 => self.oscillators_active = !self.oscillators_active,
-            1 => self.granular_active = !self.granular_active,
-            2 => {
-                if self.key_index == 0 {
-                    self.key_index = KEY_NAMES.len() - 1;
-                } else {
-                    self.key_index -= 1;
-                }
-            }
+            0 => self.toggle_wt(),
+            1 => self.toggle_gr(),
+            2 => self.key_down(),
             3 => {
                 if self.scale_index == 0 {
                     self.scale_index = SCALE_NAMES.len() - 1;
@@ -517,5 +557,100 @@ mod tests {
             lines[12].contains("Basic"),
             "line 12 should show the selected algo name"
         );
+    }
+
+    #[test]
+    fn button_toggle_wt_turns_oscillators_off() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.oscillators_active = true;
+        menu.apply_button(Button::ToggleWt);
+        assert_eq!(menu.oscillators_active, false);
+    }
+
+    #[test]
+    fn button_toggle_wt_turns_oscillators_back_on() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.oscillators_active = true;
+        menu.apply_button(Button::ToggleWt);
+        menu.apply_button(Button::ToggleWt);
+        assert_eq!(menu.oscillators_active, true);
+    }
+
+    #[test]
+    fn button_toggle_granular_turns_granular_on() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.apply_button(Button::ToggleGranular);
+        assert_eq!(menu.granular_active, true);
+    }
+
+    #[test]
+    fn button_toggle_granular_turns_granular_off() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.apply_button(Button::ToggleGranular);
+        menu.apply_button(Button::ToggleGranular);
+        assert_eq!(menu.granular_active, false);
+    }
+
+    #[test]
+    fn button_note_up_increments_key_index() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.key_index = 0;
+        menu.apply_button(Button::NoteUp);
+        assert_eq!(menu.key_index, 1);
+    }
+
+    #[test]
+    fn button_note_up_wraps_at_last_key() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.key_index = KEY_NAMES.len() - 1;
+        menu.apply_button(Button::NoteUp);
+        assert_eq!(menu.key_index, 0);
+    }
+
+    #[test]
+    fn button_note_down_decrements_key_index() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.key_index = 5;
+        menu.apply_button(Button::NoteDown);
+        assert_eq!(menu.key_index, 4);
+    }
+
+    #[test]
+    fn button_note_down_wraps_at_zero() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.key_index = 0;
+        menu.apply_button(Button::NoteDown);
+        assert_eq!(menu.key_index, KEY_NAMES.len() - 1);
+    }
+
+    #[test]
+    fn button_bank_cycle_increments_bank_index() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.apply_button(Button::BankCycle);
+        assert_eq!(menu.bank_index, 1);
+    }
+
+    #[test]
+    fn button_bank_cycle_wraps_at_last_bank() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.bank_index = BANK_NAMES.len() - 1;
+        menu.apply_button(Button::BankCycle);
+        assert_eq!(menu.bank_index, 0);
+    }
+
+    #[test]
+    fn button_scale_cycle_increments_scale_index() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.scale_index = 0;
+        menu.apply_button(Button::ScaleCycle);
+        assert_eq!(menu.scale_index, 1);
+    }
+
+    #[test]
+    fn button_scale_cycle_wraps_at_last_scale() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.scale_index = SCALE_NAMES.len() - 1;
+        menu.apply_button(Button::ScaleCycle);
+        assert_eq!(menu.scale_index, 0);
     }
 }
