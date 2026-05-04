@@ -136,13 +136,7 @@ fn run_audio_loop(
                 AudioCommand::SetGranularVoices(n) => engine.set_granular_voices(n),
                 AudioCommand::SetBytebeatAlgo(algo) => engine.set_bytebeat_algo(algo),
                 AudioCommand::SetBytebeatVolume(level) => engine.set_bytebeat_volume(level),
-                AudioCommand::SetBytebeatActive(active) => {
-                    if active {
-                        engine.set_bytebeat_active_immediate(true);
-                    } else {
-                        engine.set_bytebeat_active(false);
-                    }
-                }
+                AudioCommand::SetBytebeatActive(active) => engine.set_bytebeat_active(active),
                 AudioCommand::SetBytebeatOscillatorCount(n) => engine.set_bytebeat_oscillator_count(n),
                 AudioCommand::SetBytebeatRandomAlgo { enabled, period_samples } => {
                     engine.set_bytebeat_random_algo(enabled, period_samples)

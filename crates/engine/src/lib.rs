@@ -1270,7 +1270,7 @@ impl Engine {
                     // Only mix into output if this voice has non-zero gain or is still fading
                     if bb_osc.voice.gain > 1e-6 || bb_osc.voice.target_gain > 0.0 {
                         // Evaluate algorithm at t + t_offset
-                        let t_eval = (bb_osc.t + bb_osc.t_offset as f64) as u64;
+                        let t_eval = (bb_osc.t as u64).wrapping_add(bb_osc.t_offset);
                         let byte = self.bytebeat.algo.eval(t_eval) as i8;
                         let sample = byte as f32 / 128.0;
 
