@@ -1350,9 +1350,17 @@ fn main() -> Result<()> {
             }
 
             if menu.bytebeat_algo_index != old_bytebeat_algo {
-                let algo = bytebeat_algo_from_index(menu.bytebeat_algo_index);
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetBytebeatAlgo(algo)) {
-                    warn!("failed to send bytebeat algo to audio thread: {err}");
+                match bytebeat_algo_from_index(menu.bytebeat_algo_index) {
+                    Some(algo) => {
+                        if let Err(err) = audio_tx.try_send(AudioCommand::SetBytebeatAlgo(algo)) {
+                            warn!("failed to send bytebeat algo to audio thread: {err}");
+                        }
+                    }
+                    None => {
+                        if let Err(err) = audio_tx.try_send(AudioCommand::SetBytebeatActive(false)) {
+                            warn!("failed to send bytebeat active to audio thread: {err}");
+                        }
+                    }
                 }
             }
         }
