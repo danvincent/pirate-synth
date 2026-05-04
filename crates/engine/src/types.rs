@@ -84,6 +84,14 @@ pub enum BytebeatAlgo {
 }
 
 impl BytebeatAlgo {
+    pub const ALL: [BytebeatAlgo; 5] = [
+        BytebeatAlgo::Basic,
+        BytebeatAlgo::Sierpinski,
+        BytebeatAlgo::Melody,
+        BytebeatAlgo::Harmony,
+        BytebeatAlgo::Acid,
+    ];
+
     pub fn eval(self, t: u64) -> u8 {
         match self {
             BytebeatAlgo::Basic => (t & (t >> 8)) as u8,
