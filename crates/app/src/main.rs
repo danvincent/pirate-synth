@@ -653,7 +653,7 @@ fn scale_mode_from_index(idx: usize) -> ScaleMode {
 }
 
 /// Map a menu `bytebeat_algo_index` to an engine `BytebeatAlgo`.
-/// Index 0–4 map to the five formulas; index 5 ("Random") is handled separately in dispatch.
+/// Indices 0–9 map to named algorithms; index 10 (Random) is handled separately in dispatch.
 fn bytebeat_algo_from_index(idx: usize) -> Option<BytebeatAlgo> {
     match idx {
         0 => Some(BytebeatAlgo::Basic),
@@ -661,7 +661,12 @@ fn bytebeat_algo_from_index(idx: usize) -> Option<BytebeatAlgo> {
         2 => Some(BytebeatAlgo::Melody),
         3 => Some(BytebeatAlgo::Harmony),
         4 => Some(BytebeatAlgo::Acid),
-        _ => None, // index 5 = Random, handled separately in dispatch
+        5 => Some(BytebeatAlgo::Wobble),
+        6 => Some(BytebeatAlgo::Glitch),
+        7 => Some(BytebeatAlgo::Pulse),
+        8 => Some(BytebeatAlgo::Storm),
+        9 => Some(BytebeatAlgo::Echo),
+        _ => None, // index 10 = Random, handled separately in dispatch
     }
 }
 

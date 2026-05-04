@@ -17,8 +17,8 @@ pub const SCALE_NAMES: [&str; 9] = [
 pub const BANK_NAMES: [&str; 4] = ["A", "B", "C", "D"];
 
 /// Display names for the bytebeat algorithm options.
-/// Index 0 is now "Basic" (no "Off"). "Random" is index 5.
-pub const BYTEBEAT_ALGO_NAMES: [&str; 6] = ["Basic", "Sierpinski", "Melody", "Harmony", "Acid", "Random"];
+/// Index 0 is now "Basic" (no "Off"). "Random" is index 10.
+pub const BYTEBEAT_ALGO_NAMES: [&str; 11] = ["Basic", "Sierpinski", "Melody", "Harmony", "Acid", "Wobble", "Glitch", "Pulse", "Storm", "Echo", "Random"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuContext {
@@ -597,7 +597,7 @@ mod tests {
 
     #[test]
     fn bb_algo_last_is_random() {
-        assert_eq!(BYTEBEAT_ALGO_NAMES[5], "Random");
+        assert_eq!(BYTEBEAT_ALGO_NAMES[10], "Random");
     }
 
     #[test]
