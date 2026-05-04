@@ -232,10 +232,13 @@ impl MenuState {
                 self.selected_item = (self.selected_item + 1) % self.total_items();
             }
             Button::Back | Button::Left => {
-                // Always exit to main
-                self.context = MenuContext::Main;
-                self.selected_item = 0;
-                self.scroll_offset = 0;
+                if self.selected_item == 0 {
+                    self.context = MenuContext::Main;
+                    self.selected_item = 0;
+                    self.scroll_offset = 0;
+                } else {
+                    self.decrement_submenu_value();
+                }
             }
             Button::Select | Button::Right => {
                 // Item 0 is always "Back"
@@ -330,6 +333,32 @@ impl MenuState {
                 2 => self.bb_volume = (self.bb_volume + 10).min(100),
                 3 => self.bytebeat_algo_index = (self.bytebeat_algo_index + 1) % BYTEBEAT_ALGO_NAMES.len(),
                 4 => self.bb_osc_count = (self.bb_osc_count + 1).min(8),
+                _ => {}
+            },
+            MenuContext::Main => {}
+        }
+    }
+
+    fn decrement_submenu_value(&mut self) {
+        match self.context {
+            MenuContext::Wavetable => match self.selected_item {
+                1 => self.toggle_wt(),
+                2 => self.wt_volume = (self.wt_volume - 10).max(0),
+                3 => self.bank_index = if self.bank_index == 0 { BANK_NAMES.len() - 1 } else { self.bank_index - 1 },
+                4 => self.osc_count = (self.osc_count - 1).max(1),
+                _ => {}
+            },
+            MenuContext::Granular => match self.selected_item {
+                1 => self.toggle_gr(),
+                2 => self.gr_volume = (self.gr_volume - 10).max(0),
+                3 => self.gr_voices = (self.gr_voices - 1).max(1),
+                _ => {}
+            },
+            MenuContext::Bytebeat => match self.selected_item {
+                1 => self.bb_active = !self.bb_active,
+                2 => self.bb_volume = (self.bb_volume - 10).max(0),
+                3 => self.bytebeat_algo_index = if self.bytebeat_algo_index == 0 { BYTEBEAT_ALGO_NAMES.len() - 1 } else { self.bytebeat_algo_index - 1 },
+                4 => self.bb_osc_count = (self.bb_osc_count - 1).max(1),
                 _ => {}
             },
             MenuContext::Main => {}
@@ -458,7 +487,7 @@ mod tests {
     fn back_exits_submenu_to_main() {
         let mut menu = MenuState::new(0.0, 8, 8);
         menu.context = MenuContext::Wavetable;
-        menu.selected_item = 2;
+        menu.selected_item = 0; // At "Back" row
         menu.apply_button(Button::Back);
         assert_eq!(menu.context, MenuContext::Main);
         assert_eq!(menu.selected_item, 0);
@@ -468,7 +497,7 @@ mod tests {
     fn left_exits_submenu_to_main() {
         let mut menu = MenuState::new(0.0, 8, 8);
         menu.context = MenuContext::Granular;
-        menu.selected_item = 2;
+        menu.selected_item = 0; // At "Back" row
         menu.apply_button(Button::Left);
         assert_eq!(menu.context, MenuContext::Main);
         assert_eq!(menu.selected_item, 0);
@@ -614,7 +643,7 @@ mod tests {
     fn back_in_submenu_resets_selected_item() {
         let mut menu = MenuState::new(0.0, 8, 8);
         menu.context = MenuContext::Bytebeat;
-        menu.selected_item = 3;
+        menu.selected_item = 0; // At "Back" row
         menu.apply_button(Button::Back);
         assert_eq!(menu.context, MenuContext::Main);
         assert_eq!(menu.selected_item, 0);
@@ -747,12 +776,13 @@ mod tests {
         // Enter bytebeat submenu
         menu.selected_item = 2;
         menu.apply_button(Button::Select);
-        // Navigate to bb_active item and DO NOT press Select
-        menu.selected_item = 1;
-        // Press Back — should exit without toggling bb_active
+        // Navigate to Back row (selected_item = 0)
+        menu.selected_item = 0;
+        let bb_active_before = menu.bb_active;
+        // Press Back — should exit from Back row
         menu.apply_button(Button::Back);
         assert_eq!(menu.context, MenuContext::Main, "should be back in main");
-        assert_eq!(menu.bb_active, false, "bb_active should not have changed");
+        assert_eq!(menu.bb_active, bb_active_before, "bb_active should not have changed");
     }
 
     #[test]
@@ -761,7 +791,8 @@ mod tests {
         // Enter granular submenu
         menu.selected_item = 1;
         menu.apply_button(Button::Select);
-        menu.selected_item = 2; // volume item
+        // Navigate to Back row
+        menu.selected_item = 0;
         let vol_before = menu.gr_volume;
         menu.apply_button(Button::Left);
         assert_eq!(menu.context, MenuContext::Main, "should be back in main");

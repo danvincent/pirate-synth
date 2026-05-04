@@ -55,8 +55,6 @@ struct Oscillator {
     target_base_hz: f32,
     hz_ramp_rate: f32,
     rng_state: u64,
-    drift_lfo_phase: f32,
-    drift_lfo_rate_hz: f32,
     voice: Voice,
     tremolo_phase: f32,
     tremolo_rate_hz: f32,
@@ -203,8 +201,8 @@ impl Engine {
             let mut rng_state = (sample_rate as u64)
                 .wrapping_mul(0xdeadbeef)
                 .wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15));
-            let drift_lfo_start = lcg_next(&mut rng_state) as f32 / u32::MAX as f32;
-            let drift_lfo_rate = 0.05 + (lcg_next(&mut rng_state) as f32 / u32::MAX as f32) * 0.45;
+            let _drift_lfo_start = lcg_next(&mut rng_state) as f32 / u32::MAX as f32;
+            let _drift_lfo_rate = 0.05 + (lcg_next(&mut rng_state) as f32 / u32::MAX as f32) * 0.45;
             let tremolo_phase_start = lcg_next(&mut rng_state) as f32 / u32::MAX as f32;
             let tremolo_rate = 0.03 + (lcg_next(&mut rng_state) as f32 / u32::MAX as f32) * 0.22;
 
@@ -215,8 +213,6 @@ impl Engine {
                 target_base_hz: C2_FREQUENCY_HZ,
                 hz_ramp_rate: 0.0,
                 rng_state,
-                drift_lfo_phase: drift_lfo_start,
-                drift_lfo_rate_hz: drift_lfo_rate,
                 voice: Voice::new(
                     std::f32::consts::FRAC_1_SQRT_2,
                     std::f32::consts::FRAC_1_SQRT_2,
@@ -1002,20 +998,13 @@ impl Engine {
                     s = s * amp;
                 }
 
-                // Drift LFO
-                let lfo_incr = osc.drift_lfo_rate_hz / self.sample_rate as f32;
-                osc.drift_lfo_phase = (osc.drift_lfo_phase + lfo_incr).fract();
-                let drift_cents =
-                    self.fine_tune_cents * (osc.drift_lfo_phase * 2.0 * std::f32::consts::PI).sin();
-                let drift_ratio = 2.0f32.powf(drift_cents / 1200.0);
-
                 // FM modulation: even osc use pre-collected odd samples
                 let fm_mod = if self.fm_enabled && osc_idx % 2 == 0 {
                     pre_odd_mono * self.fm_depth_ramp
                 } else {
                     0.0
                 };
-                let incr = (osc.current_base_hz * osc.detune_ratio * drift_ratio)
+                let incr = (osc.current_base_hz * osc.detune_ratio)
                     / self.sample_rate as f32
                     + fm_mod;
                 let new_phase = osc.phase + incr;
