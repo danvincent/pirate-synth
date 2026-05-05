@@ -60,8 +60,11 @@ pub enum AudioCommand {
     SetGranularVolume(u8),
     SetOscillatorCount(usize),
     SetGranularVoices(usize),
-    SetBytebeatAlgo(Option<BytebeatAlgo>),
+    SetBytebeatAlgo(BytebeatAlgo),
     SetBytebeatVolume(u8),
+    SetBytebeatActive(bool),
+    SetBytebeatOscillatorCount(usize),
+    SetBytebeatRandomAlgo { enabled: bool, period_samples: u64 },
     Stop,
 }
 
@@ -133,6 +136,11 @@ fn run_audio_loop(
                 AudioCommand::SetGranularVoices(n) => engine.set_granular_voices(n),
                 AudioCommand::SetBytebeatAlgo(algo) => engine.set_bytebeat_algo(algo),
                 AudioCommand::SetBytebeatVolume(level) => engine.set_bytebeat_volume(level),
+                AudioCommand::SetBytebeatActive(active) => engine.set_bytebeat_active(active),
+                AudioCommand::SetBytebeatOscillatorCount(n) => engine.set_bytebeat_oscillator_count(n),
+                AudioCommand::SetBytebeatRandomAlgo { enabled, period_samples } => {
+                    engine.set_bytebeat_random_algo(enabled, period_samples)
+                }
                 AudioCommand::Stop => {
                     drop(stdin);
                     let _ = child.wait();

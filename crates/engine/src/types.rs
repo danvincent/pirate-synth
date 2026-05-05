@@ -81,9 +81,32 @@ pub enum BytebeatAlgo {
     Harmony,
     /// `t * (t >> 7 | t >> 14)` – acid bass texture
     Acid,
+    /// `(t.wrapping_mul(t >> 7) ^ (t >> 4))` – wobbling texture
+    Wobble,
+    /// `((t & (t >> 9)).wrapping_mul(t >> 3 & (t >> 5)))` – glitchy rhythm
+    Glitch,
+    /// `((t >> 4) & (t >> 8 | t >> 3))` – pulsing pattern
+    Pulse,
+    /// `((t | (t >> 5)).wrapping_mul(t >> 8 | t >> 13))` – stormy chaos
+    Storm,
+    /// `(t >> 1 ^ (t >> 4 | t >> 8))` – echoing delay
+    Echo,
 }
 
 impl BytebeatAlgo {
+    pub const ALL: [BytebeatAlgo; 10] = [
+        BytebeatAlgo::Basic,
+        BytebeatAlgo::Sierpinski,
+        BytebeatAlgo::Melody,
+        BytebeatAlgo::Harmony,
+        BytebeatAlgo::Acid,
+        BytebeatAlgo::Wobble,
+        BytebeatAlgo::Glitch,
+        BytebeatAlgo::Pulse,
+        BytebeatAlgo::Storm,
+        BytebeatAlgo::Echo,
+    ];
+
     pub fn eval(self, t: u64) -> u8 {
         match self {
             BytebeatAlgo::Basic => (t & (t >> 8)) as u8,
@@ -95,6 +118,11 @@ impl BytebeatAlgo {
             }
             BytebeatAlgo::Harmony => (t | (t >> 3) | (t >> 5) | (t >> 7)) as u8,
             BytebeatAlgo::Acid => t.wrapping_mul(t >> 7 | t >> 14) as u8,
+            BytebeatAlgo::Wobble => (t.wrapping_mul(t >> 7) ^ (t >> 4)) as u8,
+            BytebeatAlgo::Glitch => ((t & (t >> 9)).wrapping_mul(t >> 3 & (t >> 5))) as u8,
+            BytebeatAlgo::Pulse => ((t >> 4) & (t >> 8 | t >> 3)) as u8,
+            BytebeatAlgo::Storm => ((t | (t >> 5)).wrapping_mul(t >> 8 | t >> 13)) as u8,
+            BytebeatAlgo::Echo => (t >> 1 ^ (t >> 4 | t >> 8)) as u8,
         }
     }
 
@@ -105,6 +133,11 @@ impl BytebeatAlgo {
             BytebeatAlgo::Melody => "Melody",
             BytebeatAlgo::Harmony => "Harmony",
             BytebeatAlgo::Acid => "Acid",
+            BytebeatAlgo::Wobble => "Wobble",
+            BytebeatAlgo::Glitch => "Glitch",
+            BytebeatAlgo::Pulse => "Pulse",
+            BytebeatAlgo::Storm => "Storm",
+            BytebeatAlgo::Echo => "Echo",
         }
     }
 }

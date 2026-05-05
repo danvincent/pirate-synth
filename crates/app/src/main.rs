@@ -15,7 +15,7 @@ use midir::{Ignore, MidiInput, MidiInputConnection};
 use serde::Deserialize;
 use ui::{
     ButtonConfig, ButtonReader, Ili9341Display, JoystickButtonReader, LinuxFbDisplay,
-    MenuState, St7789Display, VideoStatus,
+    MenuState, St7789Display, VideoStatus, BYTEBEAT_ALGO_NAMES,
 };
 use visuals_drm::{try_spawn_visuals, VisualsInitError};
 
@@ -653,16 +653,20 @@ fn scale_mode_from_index(idx: usize) -> ScaleMode {
 }
 
 /// Map a menu `bytebeat_algo_index` to an engine `BytebeatAlgo`.
-/// Index 0 means off (`None`); indices 1–5 map to the five formulas.
+/// Indices 0–9 map to named algorithms; index 10 (Random) is handled separately in dispatch.
 fn bytebeat_algo_from_index(idx: usize) -> Option<BytebeatAlgo> {
     match idx {
-        0 => None,
-        1 => Some(BytebeatAlgo::Basic),
-        2 => Some(BytebeatAlgo::Sierpinski),
-        3 => Some(BytebeatAlgo::Melody),
-        4 => Some(BytebeatAlgo::Harmony),
-        5 => Some(BytebeatAlgo::Acid),
-        _ => None,
+        0 => Some(BytebeatAlgo::Basic),
+        1 => Some(BytebeatAlgo::Sierpinski),
+        2 => Some(BytebeatAlgo::Melody),
+        3 => Some(BytebeatAlgo::Harmony),
+        4 => Some(BytebeatAlgo::Acid),
+        5 => Some(BytebeatAlgo::Wobble),
+        6 => Some(BytebeatAlgo::Glitch),
+        7 => Some(BytebeatAlgo::Pulse),
+        8 => Some(BytebeatAlgo::Storm),
+        9 => Some(BytebeatAlgo::Echo),
+        _ => None, // index 10 = Random, handled separately in dispatch
     }
 }
 
@@ -1093,6 +1097,7 @@ fn main() -> Result<()> {
     engine.set_oscillators_active_immediate(config.oscillators_active);
     engine.set_granular_volume(config.granular_volume);
     engine.set_granular_active_immediate(config.granular_active);
+    engine.set_bytebeat_volume(menu.bb_volume);
     info!("initial frequency set to {:.2} Hz", initial_hz);
 
     let (audio_tx, audio_rx) = command_channel();
@@ -1267,6 +1272,9 @@ fn main() -> Result<()> {
             let old_osc_count = menu.osc_count;
             let old_gr_voices = menu.gr_voices;
             let old_bytebeat_algo = menu.bytebeat_algo_index;
+            let old_bb_active = menu.bb_active;
+            let old_bb_volume = menu.bb_volume;
+            let old_bb_osc_count = menu.bb_osc_count;
 
             menu.apply_button(button);
             display.draw_menu(&menu)?;
@@ -1350,9 +1358,36 @@ fn main() -> Result<()> {
             }
 
             if menu.bytebeat_algo_index != old_bytebeat_algo {
-                let algo = bytebeat_algo_from_index(menu.bytebeat_algo_index);
-                if let Err(err) = audio_tx.try_send(AudioCommand::SetBytebeatAlgo(algo)) {
-                    warn!("failed to send bytebeat algo to audio thread: {err}");
+                if menu.bytebeat_algo_index == BYTEBEAT_ALGO_NAMES.len() - 1 {
+                    // "Random" selected (last entry)
+                    let period_samples = 4 * config.sample_rate as u64;
+                    if let Err(err) = audio_tx.try_send(AudioCommand::SetBytebeatRandomAlgo {
+                        enabled: true,
+                        period_samples,
+                    }) {
+                        warn!("failed to send bytebeat random algo: {err}");
+                    }
+                } else if let Some(algo) = bytebeat_algo_from_index(menu.bytebeat_algo_index) {
+                    if let Err(err) = audio_tx.try_send(AudioCommand::SetBytebeatAlgo(algo)) {
+                        warn!("failed to send bytebeat algo: {err}");
+                    }
+                }
+            }
+            if menu.bb_active != old_bb_active {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetBytebeatActive(menu.bb_active)) {
+                    warn!("failed to send bytebeat active: {err}");
+                }
+            }
+            if menu.bb_volume != old_bb_volume {
+                if let Err(err) = audio_tx.try_send(AudioCommand::SetBytebeatVolume(menu.bb_volume)) {
+                    warn!("failed to send bytebeat volume: {err}");
+                }
+            }
+            if menu.bb_osc_count != old_bb_osc_count {
+                if let Err(err) =
+                    audio_tx.try_send(AudioCommand::SetBytebeatOscillatorCount(menu.bb_osc_count))
+                {
+                    warn!("failed to send bytebeat oscillator count: {err}");
                 }
             }
         }

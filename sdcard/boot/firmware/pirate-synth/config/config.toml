@@ -36,7 +36,7 @@ volume = 100   # Master output volume 0–100
 # Duration in seconds over which cents, scale, and bank changes are smoothed (±20% per-osc jitter)
 transition_secs    = 30.0
 # Glide time in milliseconds for note/frequency changes. 0 = snap immediately.
-note_transition_ms = 0.0
+note_transition_ms = 5000.0
 
 # ── Wavetable reverb ──────────────────────────────────────────────────────────
 # Reverb applied to the wavetable oscillator bus.
@@ -50,14 +50,14 @@ reverb_comb_count = 4   # 1–8 — more combs = denser reverb, higher CPU cost
 # Independent reverb applied to the granular synthesis bus.
 # Higher feedback and comb count suit long drone textures.
 granular_reverb_enabled   = true
-granular_reverb_wet       = 0.45  # Recommend 0.40–0.60 for drone use
+granular_reverb_wet       = 0.60  # Recommend 0.40–0.60 for drone use
 granular_reverb_feedback  = 0.88  # Slightly longer tail than WT default
 granular_reverb_damp      = 0.12  # Darker tail — less high-frequency rolloff
 granular_reverb_comb_count = 8    # Full 8-comb Freeverb density
 
 # ── Tremolo ───────────────────────────────────────────────────────────────────
 # Slow amplitude modulation applied per oscillator at a randomised rate.
-tremolo_enabled = true
+tremolo_enabled = false
 tremolo_depth   = 0.05  # 0.0 = no tremolo, 1.0 = full depth (silence to full)
 
 # ── Wavetable crossfade ───────────────────────────────────────────────────────
