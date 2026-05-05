@@ -852,10 +852,6 @@ mod tests {
         menu.context = MenuContext::Wavetable;
         menu.wt_volume = 0;
         menu.selected_item = 2;
-        menu.apply_button(Button::Back); // use Back (= Left/decrement) path via decrement_submenu_value
-        // Directly call decrement via Left button while on volume row
-        menu.context = MenuContext::Wavetable;
-        menu.selected_item = 2;
         menu.apply_button(Button::Left);
         assert_eq!(menu.wt_volume, 0, "volume should saturate at 0, not underflow");
     }

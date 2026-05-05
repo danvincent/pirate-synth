@@ -1261,6 +1261,8 @@ impl Engine {
                         bb_osc.drift_lfo_phase -= 1.0;
                     }
                     let drift_amount = (bb_osc.drift_lfo_phase * 2.0 * std::f32::consts::PI).sin() * 0.01;
+                    // Small multiplicative drift ≈ ±1% around 1.0; avoids the ~2.7× scale
+                    // that (1.0 + x).exp() would produce even when drift_amount is near zero.
                     let drift_ratio = 1.0f32 + drift_amount;
 
                     // Calculate pitched t increment
@@ -3938,7 +3940,7 @@ mod tests {
         engine.set_bytebeat_random_algo(true, 100);
 
         // Pre-compute the expected algo after exactly one period elapses.
-        // BytebeatState is initialised with rng_state = 0xBBBEAD_1234_u64.
+        // BytebeatState is initialized with rng_state = 0xBBBEAD_1234_u64.
         let mut rng = 0xBBBEAD_1234_u64;
         let expected_idx = lcg_next(&mut rng) as usize % BytebeatAlgo::ALL.len();
         let expected_algo = BytebeatAlgo::ALL[expected_idx];

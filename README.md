@@ -217,7 +217,7 @@ hdmi_visuals_enabled = false
 - `granular_active` sets whether the granular layer starts active at boot; toggleable as `Granular` in the UI
 - The Bytebeat layer is controlled entirely from the UI (`Bytebeat →` submenu): On/Off, Volume (0–100), Algorithm (10 named + Random), and Oscillator count (1–8)
 - `hdmi_visuals_enabled` gates HDMI visualizer startup (`Video: Off/On/No HDMI` in the UI)
-- Both Wavetable/Granular and Bytebeat layers can be active simultaneously; their volumes are mixed independently
+- All three synthesis layers (Wavetable, Granular, and Bytebeat) can be active simultaneously; their volumes are mixed independently
 
 ## GPIO/SPI assumptions
 
