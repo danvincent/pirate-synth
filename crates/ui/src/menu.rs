@@ -343,22 +343,22 @@ impl MenuState {
         match self.context {
             MenuContext::Wavetable => match self.selected_item {
                 1 => self.toggle_wt(),
-                2 => self.wt_volume = (self.wt_volume - 10).max(0),
+                2 => self.wt_volume = self.wt_volume.saturating_sub(10),
                 3 => self.bank_index = if self.bank_index == 0 { BANK_NAMES.len() - 1 } else { self.bank_index - 1 },
-                4 => self.osc_count = (self.osc_count - 1).max(1),
+                4 => self.osc_count = self.osc_count.saturating_sub(1).max(1),
                 _ => {}
             },
             MenuContext::Granular => match self.selected_item {
                 1 => self.toggle_gr(),
-                2 => self.gr_volume = (self.gr_volume - 10).max(0),
-                3 => self.gr_voices = (self.gr_voices - 1).max(1),
+                2 => self.gr_volume = self.gr_volume.saturating_sub(10),
+                3 => self.gr_voices = self.gr_voices.saturating_sub(1).max(1),
                 _ => {}
             },
             MenuContext::Bytebeat => match self.selected_item {
                 1 => self.bb_active = !self.bb_active,
-                2 => self.bb_volume = (self.bb_volume - 10).max(0),
+                2 => self.bb_volume = self.bb_volume.saturating_sub(10),
                 3 => self.bytebeat_algo_index = if self.bytebeat_algo_index == 0 { BYTEBEAT_ALGO_NAMES.len() - 1 } else { self.bytebeat_algo_index - 1 },
-                4 => self.bb_osc_count = (self.bb_osc_count - 1).max(1),
+                4 => self.bb_osc_count = self.bb_osc_count.saturating_sub(1).max(1),
                 _ => {}
             },
             MenuContext::Main => {}
@@ -844,5 +844,59 @@ mod tests {
         let gr_before = menu.granular_active;
         menu.apply_button(Button::ToggleGranular);
         assert_ne!(menu.granular_active, gr_before, "ToggleGranular should work in submenu");
+    }
+
+    #[test]
+    fn wt_volume_decrement_does_not_underflow_at_zero() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.context = MenuContext::Wavetable;
+        menu.wt_volume = 0;
+        menu.selected_item = 2;
+        menu.apply_button(Button::Back); // use Back (= Left/decrement) path via decrement_submenu_value
+        // Directly call decrement via Left button while on volume row
+        menu.context = MenuContext::Wavetable;
+        menu.selected_item = 2;
+        menu.apply_button(Button::Left);
+        assert_eq!(menu.wt_volume, 0, "volume should saturate at 0, not underflow");
+    }
+
+    #[test]
+    fn gr_volume_decrement_does_not_underflow_at_zero() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.context = MenuContext::Granular;
+        menu.gr_volume = 0;
+        menu.selected_item = 2;
+        menu.apply_button(Button::Left);
+        assert_eq!(menu.gr_volume, 0, "gr_volume should saturate at 0, not underflow");
+    }
+
+    #[test]
+    fn bb_volume_decrement_does_not_underflow_at_zero() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.context = MenuContext::Bytebeat;
+        menu.bb_volume = 0;
+        menu.selected_item = 2;
+        menu.apply_button(Button::Left);
+        assert_eq!(menu.bb_volume, 0, "bb_volume should saturate at 0, not underflow");
+    }
+
+    #[test]
+    fn osc_count_decrement_does_not_go_below_one() {
+        let mut menu = MenuState::new(0.0, 1, 8);
+        menu.context = MenuContext::Wavetable;
+        menu.osc_count = 1;
+        menu.selected_item = 4;
+        menu.apply_button(Button::Left);
+        assert_eq!(menu.osc_count, 1, "osc_count minimum is 1");
+    }
+
+    #[test]
+    fn bb_osc_count_decrement_does_not_go_below_one() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.context = MenuContext::Bytebeat;
+        menu.bb_osc_count = 1;
+        menu.selected_item = 4;
+        menu.apply_button(Button::Left);
+        assert_eq!(menu.bb_osc_count, 1, "bb_osc_count minimum is 1");
     }
 }

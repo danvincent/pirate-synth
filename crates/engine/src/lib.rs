@@ -227,8 +227,8 @@ impl Engine {
             });
         }
 
-        // Build bytebeat oscillators (4 by default, same layout as WT oscillators)
-        const BB_OSC_COUNT: usize = 4;
+        // Build bytebeat oscillators (8 by default, same layout as WT oscillators)
+        const BB_OSC_COUNT: usize = 8;
         let mut bb_oscillators = Vec::with_capacity(BB_OSC_COUNT);
         for i in 0..BB_OSC_COUNT {
             let mut rng = (sample_rate as u64)
@@ -654,7 +654,7 @@ impl Engine {
         }
     }
 
-    /// Select the bytebeat algorithm to mix in. Pass `None` to disable bytebeat.
+    /// Select the bytebeat algorithm. Use `set_bytebeat_active` to enable or disable bytebeat.
     pub fn set_bytebeat_algo(&mut self, algo: BytebeatAlgo) {
         self.bytebeat.algo = algo;
         self.bytebeat.random_algo = false;
@@ -722,6 +722,11 @@ impl Engine {
             self.bytebeat.random_algo_period_samples = period_samples;
         }
         self.bytebeat.random_algo_counter = 0;
+    }
+
+    /// Return the currently active bytebeat algorithm.
+    pub(crate) fn bytebeat_algo(&self) -> BytebeatAlgo {
+        self.bytebeat.algo
     }
 
     fn refresh_granular_channel_assignments(&mut self) {
@@ -1256,7 +1261,7 @@ impl Engine {
                         bb_osc.drift_lfo_phase -= 1.0;
                     }
                     let drift_amount = (bb_osc.drift_lfo_phase * 2.0 * std::f32::consts::PI).sin() * 0.01;
-                    let drift_ratio = (1.0f32 + drift_amount).exp();
+                    let drift_ratio = 1.0f32 + drift_amount;
 
                     // Calculate pitched t increment
                     let hz_with_fine_tune =
@@ -3929,30 +3934,24 @@ mod tests {
         engine.set_oscillators_active_immediate(false);
         engine.set_bytebeat_active_immediate(true);
 
-        // Enable random algo with very short period (100 samples)
+        // Enable random algo with period = 100 samples
         engine.set_bytebeat_random_algo(true, 100);
 
-        // Capture samples at different times - should vary if algos are changing
-        let mut buf1 = vec![0i16; 128];
-        engine.render_i16_stereo(&mut buf1);
-        let sample1 = buf1[64]; // Middle sample
+        // Pre-compute the expected algo after exactly one period elapses.
+        // BytebeatState is initialised with rng_state = 0xBBBEAD_1234_u64.
+        let mut rng = 0xBBBEAD_1234_u64;
+        let expected_idx = lcg_next(&mut rng) as usize % BytebeatAlgo::ALL.len();
+        let expected_algo = BytebeatAlgo::ALL[expected_idx];
 
-        // Skip 200 samples (2 algo changes)
-        for _ in 0..200 {
-            let mut discard = vec![0i16; 64];
-            engine.render_i16_stereo(&mut discard);
-        }
+        // Render exactly 100 stereo frames (200 i16 values) to trigger the first algo change.
+        let mut buf = vec![0i16; 200];
+        engine.render_i16_stereo(&mut buf);
 
-        let mut buf2 = vec![0i16; 128];
-        engine.render_i16_stereo(&mut buf2);
-        let sample2 = buf2[64];
-
-        // With random algo changes, samples should likely differ
-        // (Not guaranteed but very likely over 200 samples with period 100)
-        // This is a probabilistic test
-        assert!(
-            sample1 != sample2 || true, // Allow both scenarios
-            "random algo should produce varying output (this test is probabilistic)"
+        // The algo should now be the deterministically expected value.
+        assert_eq!(
+            engine.bytebeat_algo(),
+            expected_algo,
+            "random algo should have advanced to {:?} after one period", expected_algo
         );
     }
 }

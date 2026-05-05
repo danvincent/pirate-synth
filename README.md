@@ -23,7 +23,8 @@ Boot-to-synth Raspberry Pi Zero project for the [Pimoroni Pirate Audio Headphone
 
 - Wavetable synthesis with 8 built-in waveforms (sine, triangle, sawtooth, square, pulse, etc.)
 - Granular synthesis engine (auto-selected when WAV files are present in `wav_dir`)
-- Independent on/off and volume controls for Wavetable and Granular layers; both fade in/out over 5 seconds
+- Bytebeat synthesis engine with 10 algorithms (Basic, Sierpinski, Melody, Harmony, Acid, Wobble, Glitch, Pulse, Storm, Echo) plus a random-cycling mode; up to 8 pitched oscillators with per-oscillator drift LFO and stereo spread
+- Independent on/off and volume controls for Wavetable, Granular, and Bytebeat layers; all fade in/out over 5 seconds
 - Per-oscillator fade when oscillator count changes (only added/removed oscillators fade)
 - Per-voice fade when granular voice count changes (only added/removed sources fade)
 - Per-oscillator detune, drift LFO, stereo spread
@@ -214,8 +215,9 @@ hdmi_visuals_enabled = false
   - values above loaded WAV file count round-robin the available files
 - `granular_volume` sets the initial granular output level (0–100); adjustable as `GR Vol` in the UI
 - `granular_active` sets whether the granular layer starts active at boot; toggleable as `Granular` in the UI
+- The Bytebeat layer is controlled entirely from the UI (`Bytebeat →` submenu): On/Off, Volume (0–100), Algorithm (10 named + Random), and Oscillator count (1–8)
 - `hdmi_visuals_enabled` gates HDMI visualizer startup (`Video: Off/On/No HDMI` in the UI)
-- Both layers can be active simultaneously; their volumes are mixed independently
+- Both Wavetable/Granular and Bytebeat layers can be active simultaneously; their volumes are mixed independently
 
 ## GPIO/SPI assumptions
 
