@@ -81,6 +81,8 @@ struct BytebeatOscillator {
     pub(crate) drift_lfo_rate_hz: f32,
     pub(crate) rng_state: u64,
     pub(crate) voice: Voice,
+    /// Samples remaining until the next auto-wander note pick (drone glide feature).
+    pub(crate) drone_countdown: u64,
 }
 
 /// Bytebeat synthesis state: manages multiple pitched bytebeat oscillators with random algo selection.
@@ -95,6 +97,10 @@ struct BytebeatState {
     pub(crate) random_algo_period_samples: u64,
     pub(crate) random_algo_counter: u64,
     pub(crate) rng_state: u64,
+    /// When true, each oscillator independently wanders its pitch on a timer.
+    pub(crate) drone_glide_enabled: bool,
+    /// Note-change period multiplier (1–8). Period = `drone_speed * sample_rate` samples.
+    pub(crate) drone_speed: u8,
 }
 
 pub(crate) fn lcg_next(state: &mut u64) -> u32 {
@@ -239,6 +245,8 @@ impl Engine {
             let drift_lfo_rate = 0.05 + (lcg_next(&mut rng) as f32 / u32::MAX as f32) * 0.45;
             let center = (BB_OSC_COUNT.saturating_sub(1) as f32) / 2.0;
             let cents = (i as f32 - center) * 4.0;
+            // Stagger initial drone countdown so oscillators don't all pick a new note at once.
+            let drone_countdown = (i as u64) * (sample_rate as u64 / BB_OSC_COUNT as u64);
             bb_oscillators.push(BytebeatOscillator {
                 t: 0.0,
                 t_offset,
@@ -255,6 +263,7 @@ impl Engine {
                     std::f32::consts::FRAC_1_SQRT_2,
                     std::f32::consts::FRAC_1_SQRT_2,
                 ),
+                drone_countdown,
             });
         }
         let bytebeat = BytebeatState {
@@ -268,6 +277,8 @@ impl Engine {
             random_algo_period_samples: 4 * sample_rate as u64,  // 4 second default
             random_algo_counter: 0,
             rng_state: 0xBBBEAD_1234_u64,
+            drone_glide_enabled: false,
+            drone_speed: 1,
         };
 
         let mut engine = Self {
@@ -722,6 +733,32 @@ impl Engine {
             self.bytebeat.random_algo_period_samples = period_samples;
         }
         self.bytebeat.random_algo_counter = 0;
+    }
+
+    /// Set the drone-glide speed multiplier (1–8).
+    ///
+    /// Controls how often each bytebeat oscillator picks a new target pitch when
+    /// `drone_glide_enabled` is true. The note-change period is `speed * sample_rate` samples,
+    /// so speed=1 is one new note per second and speed=8 is one new note every eight seconds.
+    pub fn set_bytebeat_drone_speed(&mut self, speed: u8) {
+        self.bytebeat.drone_speed = speed.clamp(1, 8);
+    }
+
+    /// Enable or disable the bytebeat auto-wander (drone glide) feature.
+    ///
+    /// When enabled, each oscillator independently picks a new target pitch on a repeating
+    /// timer and glides there over the full period set by `drone_speed`. When disabled,
+    /// the per-oscillator pitches snap back to the shared base frequency immediately.
+    pub fn set_bytebeat_drone_glide(&mut self, enabled: bool) {
+        self.bytebeat.drone_glide_enabled = enabled;
+        if !enabled {
+            for bb_osc in &mut self.bytebeat.oscillators {
+                bb_osc.target_base_hz = self.base_frequency_hz;
+                bb_osc.current_base_hz = self.base_frequency_hz;
+                bb_osc.hz_ramp_rate = 0.0;
+                bb_osc.drone_countdown = 0;
+            }
+        }
     }
 
     /// Return the currently active bytebeat algorithm.
@@ -1220,8 +1257,39 @@ impl Engine {
                 // Render each active bytebeat oscillator
                 let normalization = 0.25 / self.bytebeat.active_osc_count.max(1) as f32;
                 let total_osc_count = self.bytebeat.oscillators.len();
+                let drone_glide_enabled = self.bytebeat.drone_glide_enabled;
+                let drone_period =
+                    (self.bytebeat.drone_speed as u64 * self.sample_rate as u64).max(1);
+                let base_hz = self.base_frequency_hz;
+                let scale_mode = self.scale_mode;
                 for i in 0..total_osc_count {
                     let bb_osc = &mut self.bytebeat.oscillators[i];
+
+                    // Auto-wander: pick a new target pitch when the countdown expires.
+                    if drone_glide_enabled {
+                        if bb_osc.drone_countdown == 0 {
+                            let new_hz = {
+                                let semitones = scale_mode.semitones();
+                                if !semitones.is_empty() {
+                                    let st_idx = lcg_next(&mut bb_osc.rng_state) as usize
+                                        % semitones.len();
+                                    let octave_shift =
+                                        (lcg_next(&mut bb_osc.rng_state) % 3) as i32 - 1;
+                                    let st = semitones[st_idx] + octave_shift * 12;
+                                    (base_hz * 2.0f32.powf(st as f32 / 12.0)).max(20.0)
+                                } else {
+                                    let st = (lcg_next(&mut bb_osc.rng_state) % 25) as i32 - 12;
+                                    (base_hz * 2.0f32.powf(st as f32 / 12.0)).max(20.0)
+                                }
+                            };
+                            bb_osc.target_base_hz = new_hz;
+                            bb_osc.hz_ramp_rate = (new_hz - bb_osc.current_base_hz).abs()
+                                / drone_period as f32;
+                            bb_osc.drone_countdown = drone_period;
+                        } else {
+                            bb_osc.drone_countdown -= 1;
+                        }
+                    }
 
                     // Step hz ramp toward target
                     if bb_osc.current_base_hz < bb_osc.target_base_hz {
@@ -3956,5 +4024,104 @@ mod tests {
             "random algo should have advanced to {:?} after one period", expected_algo
         );
     }
-}
 
+    #[test]
+    fn bytebeat_drone_glide_disabled_by_default_leaves_pitch_unchanged() {
+        let wavetables = vec![default_sine_wavetable()];
+        let mut engine = Engine::new(48_000, 1, wavetables).unwrap();
+        engine.set_oscillators_active_immediate(false);
+        engine.set_bytebeat_algo(BytebeatAlgo::Harmony);
+        engine.set_bytebeat_active_immediate(true);
+        engine.set_frequency(220.0);
+
+        // Record pitch after setting frequency (drone glide is off by default)
+        let initial_hz = engine.bytebeat.oscillators[0].current_base_hz;
+
+        // Render many samples — without drone glide, pitch must stay at 220 Hz
+        let mut buf = vec![0i16; 48_000 * 2]; // 1 second
+        engine.render_i16_stereo(&mut buf);
+
+        assert_eq!(
+            engine.bytebeat.oscillators[0].current_base_hz,
+            initial_hz,
+            "drone glide disabled: pitch must not wander"
+        );
+    }
+
+    #[test]
+    fn bytebeat_drone_glide_shifts_pitch_after_one_period() {
+        let wavetables = vec![default_sine_wavetable()];
+        let mut engine = Engine::new(48_000, 1, wavetables).unwrap();
+        engine.set_oscillators_active_immediate(false);
+        engine.set_bytebeat_algo(BytebeatAlgo::Harmony);
+        engine.set_bytebeat_active_immediate(true);
+        engine.set_frequency(220.0);
+        // Use speed=1 → period = 1 * 48_000 = 48_000 samples
+        engine.set_bytebeat_drone_speed(1);
+        engine.set_bytebeat_drone_glide(true);
+
+        // Force countdown to 0 so the very first sample triggers a note pick
+        for bb_osc in &mut engine.bytebeat.oscillators {
+            bb_osc.drone_countdown = 0;
+        }
+
+        // Record baseline pitch
+        let before_hz = engine.bytebeat.oscillators[0].current_base_hz;
+
+        // Render enough samples to let the ramp kick in (more than one period's worth)
+        let mut buf = vec![0i16; 2 * 48_000 * 2]; // 2 seconds stereo
+        engine.render_i16_stereo(&mut buf);
+
+        // After two full periods the oscillators must have picked new notes and glided;
+        // at least one oscillator should now have a different target pitch.
+        let any_moved = engine.bytebeat.oscillators.iter().any(|o| {
+            (o.target_base_hz - before_hz).abs() > 1.0
+        });
+        assert!(
+            any_moved,
+            "drone glide enabled: at least one oscillator should have picked a new target pitch"
+        );
+    }
+
+    #[test]
+    fn bytebeat_drone_glide_disable_snaps_back_to_base() {
+        let wavetables = vec![default_sine_wavetable()];
+        let mut engine = Engine::new(48_000, 1, wavetables).unwrap();
+        engine.set_oscillators_active_immediate(false);
+        engine.set_bytebeat_algo(BytebeatAlgo::Harmony);
+        engine.set_bytebeat_active_immediate(true);
+        engine.set_frequency(440.0);
+        engine.set_bytebeat_drone_speed(1);
+        engine.set_bytebeat_drone_glide(true);
+
+        // Force an immediate note pick to put oscillators on a different pitch
+        for bb_osc in &mut engine.bytebeat.oscillators {
+            bb_osc.drone_countdown = 0;
+            bb_osc.target_base_hz = 880.0;
+            bb_osc.current_base_hz = 880.0;
+        }
+
+        // Disable drone glide: all oscillators should snap back to base frequency
+        engine.set_bytebeat_drone_glide(false);
+
+        for bb_osc in &engine.bytebeat.oscillators {
+            assert!(
+                (bb_osc.current_base_hz - 440.0).abs() < 0.1,
+                "disabling drone glide must snap pitch back to base_frequency_hz"
+            );
+            assert_eq!(bb_osc.hz_ramp_rate, 0.0, "hz_ramp_rate must be zeroed on disable");
+        }
+    }
+
+    #[test]
+    fn bytebeat_drone_speed_clamps_to_valid_range() {
+        let wavetables = vec![default_sine_wavetable()];
+        let mut engine = Engine::new(48_000, 1, wavetables).unwrap();
+        engine.set_bytebeat_drone_speed(0);
+        assert_eq!(engine.bytebeat.drone_speed, 1, "speed 0 should clamp to 1");
+        engine.set_bytebeat_drone_speed(255);
+        assert_eq!(engine.bytebeat.drone_speed, 8, "speed 255 should clamp to 8");
+        engine.set_bytebeat_drone_speed(4);
+        assert_eq!(engine.bytebeat.drone_speed, 4);
+    }
+}

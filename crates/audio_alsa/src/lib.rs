@@ -65,6 +65,8 @@ pub enum AudioCommand {
     SetBytebeatActive(bool),
     SetBytebeatOscillatorCount(usize),
     SetBytebeatRandomAlgo { enabled: bool, period_samples: u64 },
+    SetBytebeatDroneSpeed(u8),
+    SetBytebeatDroneGlide(bool),
     Stop,
 }
 
@@ -141,6 +143,8 @@ fn run_audio_loop(
                 AudioCommand::SetBytebeatRandomAlgo { enabled, period_samples } => {
                     engine.set_bytebeat_random_algo(enabled, period_samples)
                 }
+                AudioCommand::SetBytebeatDroneSpeed(speed) => engine.set_bytebeat_drone_speed(speed),
+                AudioCommand::SetBytebeatDroneGlide(enabled) => engine.set_bytebeat_drone_glide(enabled),
                 AudioCommand::Stop => {
                     drop(stdin);
                     let _ = child.wait();

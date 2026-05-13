@@ -90,6 +90,10 @@ pub struct MenuState {
     pub bb_active: bool,
     pub bb_volume: u8,
     pub bb_osc_count: usize,
+    /// Drone-glide speed multiplier (1–8). Higher = slower note wandering.
+    pub bb_speed: u8,
+    /// Whether bytebeat auto-wander (drone glide) is enabled.
+    pub bb_glide: bool,
 }
 
 impl MenuState {
@@ -116,6 +120,8 @@ impl MenuState {
             bb_active: false,
             bb_volume: 50,
             bb_osc_count: 4,
+            bb_speed: 1,
+            bb_glide: false,
         }
     }
 
@@ -128,7 +134,7 @@ impl MenuState {
             MenuContext::Main => 10,
             MenuContext::Wavetable => 5,
             MenuContext::Granular => 4,
-            MenuContext::Bytebeat => 5,
+            MenuContext::Bytebeat => 7,
         }
     }
 
@@ -333,6 +339,8 @@ impl MenuState {
                 2 => self.bb_volume = (self.bb_volume + 10).min(100),
                 3 => self.bytebeat_algo_index = (self.bytebeat_algo_index + 1) % BYTEBEAT_ALGO_NAMES.len(),
                 4 => self.bb_osc_count = (self.bb_osc_count + 1).min(8),
+                5 => self.bb_speed = (self.bb_speed + 1).min(8),
+                6 => self.bb_glide = !self.bb_glide,
                 _ => {}
             },
             MenuContext::Main => {}
@@ -359,6 +367,8 @@ impl MenuState {
                 2 => self.bb_volume = self.bb_volume.saturating_sub(10),
                 3 => self.bytebeat_algo_index = if self.bytebeat_algo_index == 0 { BYTEBEAT_ALGO_NAMES.len() - 1 } else { self.bytebeat_algo_index - 1 },
                 4 => self.bb_osc_count = self.bb_osc_count.saturating_sub(1).max(1),
+                5 => self.bb_speed = self.bb_speed.saturating_sub(1).max(1),
+                6 => self.bb_glide = !self.bb_glide,
                 _ => {}
             },
             MenuContext::Main => {}
@@ -404,6 +414,8 @@ impl MenuState {
                 format!("Volume: {}", self.bb_volume),
                 format!("Algorithm: {}", BYTEBEAT_ALGO_NAMES[self.bytebeat_algo_index]),
                 format!("Oscillators: {}", self.bb_osc_count),
+                format!("Speed: {}x", self.bb_speed),
+                format!("Glide: {}", if self.bb_glide { "On" } else { "Off" }),
             ],
         }
     }
@@ -437,11 +449,11 @@ mod tests {
     }
 
     #[test]
-    fn bytebeat_submenu_has_five_items() {
+    fn bytebeat_submenu_has_seven_items() {
         let mut menu = MenuState::new(0.0, 8, 8);
         menu.context = MenuContext::Bytebeat;
-        assert_eq!(menu.total_items(), 5);
-        assert_eq!(menu.lines().len(), 5);
+        assert_eq!(menu.total_items(), 7);
+        assert_eq!(menu.lines().len(), 7);
     }
 
     #[test]
@@ -894,5 +906,58 @@ mod tests {
         menu.selected_item = 4;
         menu.apply_button(Button::Left);
         assert_eq!(menu.bb_osc_count, 1, "bb_osc_count minimum is 1");
+    }
+
+    #[test]
+    fn bb_speed_increments_in_submenu() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.context = MenuContext::Bytebeat;
+        menu.bb_speed = 3;
+        menu.selected_item = 5;
+        menu.apply_button(Button::Right);
+        assert_eq!(menu.bb_speed, 4);
+    }
+
+    #[test]
+    fn bb_speed_decrement_does_not_go_below_one() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.context = MenuContext::Bytebeat;
+        menu.bb_speed = 1;
+        menu.selected_item = 5;
+        menu.apply_button(Button::Left);
+        assert_eq!(menu.bb_speed, 1, "bb_speed minimum is 1");
+    }
+
+    #[test]
+    fn bb_speed_does_not_exceed_eight() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.context = MenuContext::Bytebeat;
+        menu.bb_speed = 8;
+        menu.selected_item = 5;
+        menu.apply_button(Button::Right);
+        assert_eq!(menu.bb_speed, 8, "bb_speed maximum is 8");
+    }
+
+    #[test]
+    fn bb_glide_toggles_in_submenu() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.context = MenuContext::Bytebeat;
+        assert!(!menu.bb_glide);
+        menu.selected_item = 6;
+        menu.apply_button(Button::Right);
+        assert!(menu.bb_glide);
+        menu.apply_button(Button::Left);
+        assert!(!menu.bb_glide);
+    }
+
+    #[test]
+    fn bb_speed_and_glide_appear_in_lines() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.context = MenuContext::Bytebeat;
+        menu.bb_speed = 4;
+        menu.bb_glide = true;
+        let lines = menu.lines();
+        assert_eq!(lines[5], "Speed: 4x");
+        assert_eq!(lines[6], "Glide: On");
     }
 }
