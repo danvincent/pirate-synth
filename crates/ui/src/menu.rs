@@ -90,7 +90,8 @@ pub struct MenuState {
     pub bb_active: bool,
     pub bb_volume: u8,
     pub bb_osc_count: usize,
-    /// Drone-glide speed multiplier (1–8). Higher = slower note wandering.
+    /// Drone-glide speed multiplier (1–8). Higher values = longer intervals between note changes
+    /// (period = speed × sample_rate samples).
     pub bb_speed: u8,
     /// Whether bytebeat auto-wander (drone glide) is enabled.
     pub bb_glide: bool,

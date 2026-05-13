@@ -26,6 +26,9 @@ pub(crate) const C2_FREQUENCY_HZ: f32 = 65.406_39;
 /// The instantaneous carrier frequency is `base_hz + fm_held * base_hz * BB_GLACIAL_FM_DEPTH`,
 /// so a depth of 1.0 allows the frequency to swing from 0 Hz up to 2× the base frequency.
 const BB_GLACIAL_FM_DEPTH: f32 = 1.0;
+/// Duration in seconds between integer `t` steps in Glacial FM mode.
+/// At 44 100 Hz, `t` advances by one integer every `BB_GLACIAL_T_PERIOD_SECS` seconds.
+const BB_GLACIAL_T_PERIOD_SECS: f64 = 4.0;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Voice {
@@ -1370,10 +1373,10 @@ impl Engine {
                     let drift_ratio = 1.0f32 + drift_amount;
 
                     if self.bytebeat.glacial_fm_enabled {
-                        // Glacial S&H FM mode: t advances at ~1 integer step per 4 s,
+                        // Glacial S&H FM mode: t advances at ~1 integer step per BB_GLACIAL_T_PERIOD_SECS,
                         // the bytebeat byte is sample-and-held, and used to FM-modulate
                         // a sine carrier at the current pitch.
-                        let glacial_step = 1.0 / (self.sample_rate as f64 * 4.0);
+                        let glacial_step = 1.0 / (self.sample_rate as f64 * BB_GLACIAL_T_PERIOD_SECS);
                         bb_osc.t += glacial_step;
                         let t_eval = (bb_osc.t as u64).wrapping_add(bb_osc.t_offset);
                         if t_eval != bb_osc.fm_prev_t_int {
