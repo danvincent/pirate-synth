@@ -1275,6 +1275,9 @@ fn main() -> Result<()> {
             let old_bb_active = menu.bb_active;
             let old_bb_volume = menu.bb_volume;
             let old_bb_osc_count = menu.bb_osc_count;
+            let old_bb_speed = menu.bb_speed;
+            let old_bb_glide = menu.bb_glide;
+            let old_bb_glacial_fm = menu.bb_glacial_fm;
 
             menu.apply_button(button);
             display.draw_menu(&menu)?;
@@ -1388,6 +1391,27 @@ fn main() -> Result<()> {
                     audio_tx.try_send(AudioCommand::SetBytebeatOscillatorCount(menu.bb_osc_count))
                 {
                     warn!("failed to send bytebeat oscillator count: {err}");
+                }
+            }
+            if menu.bb_speed != old_bb_speed {
+                if let Err(err) =
+                    audio_tx.try_send(AudioCommand::SetBytebeatDroneSpeed(menu.bb_speed))
+                {
+                    warn!("failed to send bytebeat drone speed: {err}");
+                }
+            }
+            if menu.bb_glide != old_bb_glide {
+                if let Err(err) =
+                    audio_tx.try_send(AudioCommand::SetBytebeatDroneGlide(menu.bb_glide))
+                {
+                    warn!("failed to send bytebeat drone glide: {err}");
+                }
+            }
+            if menu.bb_glacial_fm != old_bb_glacial_fm {
+                if let Err(err) =
+                    audio_tx.try_send(AudioCommand::SetBytebeatGlacialFm(menu.bb_glacial_fm))
+                {
+                    warn!("failed to send bytebeat glacial FM: {err}");
                 }
             }
         }
