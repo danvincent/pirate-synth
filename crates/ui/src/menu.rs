@@ -94,6 +94,8 @@ pub struct MenuState {
     pub bb_speed: u8,
     /// Whether bytebeat auto-wander (drone glide) is enabled.
     pub bb_glide: bool,
+    /// Whether Glacial FM mode is enabled for the bytebeat engine.
+    pub bb_glacial_fm: bool,
 }
 
 impl MenuState {
@@ -122,6 +124,7 @@ impl MenuState {
             bb_osc_count: 4,
             bb_speed: 1,
             bb_glide: false,
+            bb_glacial_fm: false,
         }
     }
 
@@ -134,7 +137,7 @@ impl MenuState {
             MenuContext::Main => 10,
             MenuContext::Wavetable => 5,
             MenuContext::Granular => 4,
-            MenuContext::Bytebeat => 7,
+            MenuContext::Bytebeat => 8,
         }
     }
 
@@ -341,6 +344,7 @@ impl MenuState {
                 4 => self.bb_osc_count = (self.bb_osc_count + 1).min(8),
                 5 => self.bb_speed = (self.bb_speed + 1).min(8),
                 6 => self.bb_glide = !self.bb_glide,
+                7 => self.bb_glacial_fm = !self.bb_glacial_fm,
                 _ => {}
             },
             MenuContext::Main => {}
@@ -369,6 +373,7 @@ impl MenuState {
                 4 => self.bb_osc_count = self.bb_osc_count.saturating_sub(1).max(1),
                 5 => self.bb_speed = self.bb_speed.saturating_sub(1).max(1),
                 6 => self.bb_glide = !self.bb_glide,
+                7 => self.bb_glacial_fm = !self.bb_glacial_fm,
                 _ => {}
             },
             MenuContext::Main => {}
@@ -416,6 +421,7 @@ impl MenuState {
                 format!("Oscillators: {}", self.bb_osc_count),
                 format!("Speed: {}x", self.bb_speed),
                 format!("Glide: {}", if self.bb_glide { "On" } else { "Off" }),
+                format!("Glacial FM: {}", if self.bb_glacial_fm { "On" } else { "Off" }),
             ],
         }
     }
@@ -449,11 +455,11 @@ mod tests {
     }
 
     #[test]
-    fn bytebeat_submenu_has_seven_items() {
+    fn bytebeat_submenu_has_eight_items() {
         let mut menu = MenuState::new(0.0, 8, 8);
         menu.context = MenuContext::Bytebeat;
-        assert_eq!(menu.total_items(), 7);
-        assert_eq!(menu.lines().len(), 7);
+        assert_eq!(menu.total_items(), 8);
+        assert_eq!(menu.lines().len(), 8);
     }
 
     #[test]
@@ -959,5 +965,29 @@ mod tests {
         let lines = menu.lines();
         assert_eq!(lines[5], "Speed: 4x");
         assert_eq!(lines[6], "Glide: On");
+    }
+
+    #[test]
+    fn bb_glacial_fm_toggles_in_submenu() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.context = MenuContext::Bytebeat;
+        assert!(!menu.bb_glacial_fm);
+        menu.selected_item = 7;
+        menu.apply_button(Button::Right);
+        assert!(menu.bb_glacial_fm);
+        menu.apply_button(Button::Left);
+        assert!(!menu.bb_glacial_fm);
+    }
+
+    #[test]
+    fn bb_glacial_fm_appears_in_lines() {
+        let mut menu = MenuState::new(0.0, 8, 8);
+        menu.context = MenuContext::Bytebeat;
+        menu.bb_glacial_fm = false;
+        let lines = menu.lines();
+        assert_eq!(lines[7], "Glacial FM: Off");
+        menu.bb_glacial_fm = true;
+        let lines = menu.lines();
+        assert_eq!(lines[7], "Glacial FM: On");
     }
 }

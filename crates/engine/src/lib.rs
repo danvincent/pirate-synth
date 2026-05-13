@@ -21,6 +21,12 @@ use wavetable::sample_from_banks;
 
 pub(crate) const C2_FREQUENCY_HZ: f32 = 65.406_39;
 
+/// FM modulation depth in Glacial FM mode (C:M ratio 1:1).
+///
+/// The instantaneous carrier frequency is `base_hz + fm_held * base_hz * BB_GLACIAL_FM_DEPTH`,
+/// so a depth of 1.0 allows the frequency to swing from 0 Hz up to 2× the base frequency.
+const BB_GLACIAL_FM_DEPTH: f32 = 1.0;
+
 #[derive(Clone, Debug)]
 pub(crate) struct Voice {
     pub(crate) gain: f32,
@@ -83,6 +89,12 @@ struct BytebeatOscillator {
     pub(crate) voice: Voice,
     /// Samples remaining until the next auto-wander note pick (drone glide feature).
     pub(crate) drone_countdown: u64,
+    /// Phase of the FM carrier sine wave in Glacial FM mode (range [0, 1)).
+    pub(crate) fm_carrier_phase: f64,
+    /// Last integer t value sampled in Glacial FM mode (u64::MAX forces an immediate sample).
+    pub(crate) fm_prev_t_int: u64,
+    /// Held sample-and-hold byte value in Glacial FM mode (normalised to −1..1).
+    pub(crate) fm_held: f32,
 }
 
 /// Bytebeat synthesis state: manages multiple pitched bytebeat oscillators with random algo selection.
@@ -101,6 +113,9 @@ struct BytebeatState {
     pub(crate) drone_glide_enabled: bool,
     /// Note-change period multiplier (1–8). Period = `drone_speed * sample_rate` samples.
     pub(crate) drone_speed: u8,
+    /// When true, each oscillator outputs a sine carrier FM-modulated by a glacially slow
+    /// sample-and-hold bytebeat signal instead of the raw bytebeat waveform.
+    pub(crate) glacial_fm_enabled: bool,
 }
 
 pub(crate) fn lcg_next(state: &mut u64) -> u32 {
@@ -264,6 +279,9 @@ impl Engine {
                     std::f32::consts::FRAC_1_SQRT_2,
                 ),
                 drone_countdown,
+                fm_carrier_phase: 0.0,
+                fm_prev_t_int: u64::MAX,
+                fm_held: 0.0,
             });
         }
         let bytebeat = BytebeatState {
@@ -279,6 +297,7 @@ impl Engine {
             rng_state: 0xBBBEAD_1234_u64,
             drone_glide_enabled: false,
             drone_speed: 1,
+            glacial_fm_enabled: false,
         };
 
         let mut engine = Self {
@@ -757,6 +776,23 @@ impl Engine {
                 bb_osc.current_base_hz = self.base_frequency_hz;
                 bb_osc.hz_ramp_rate = 0.0;
                 bb_osc.drone_countdown = 0;
+            }
+        }
+    }
+
+    /// Enable or disable Glacial FM mode for the bytebeat engine.
+    ///
+    /// When enabled, each bytebeat oscillator outputs a sine carrier running at the current
+    /// pitch, frequency-modulated by a sample-and-hold signal derived from the bytebeat
+    /// formula advancing at a glacially slow rate (roughly one integer step every 4 s).
+    /// When disabled, each oscillator reverts to outputting the raw bytebeat waveform.
+    pub fn set_bytebeat_glacial_fm(&mut self, enabled: bool) {
+        self.bytebeat.glacial_fm_enabled = enabled;
+        if enabled {
+            for bb_osc in &mut self.bytebeat.oscillators {
+                bb_osc.fm_carrier_phase = 0.0;
+                bb_osc.fm_prev_t_int = u64::MAX;
+                bb_osc.fm_held = 0.0;
             }
         }
     }
@@ -1333,26 +1369,63 @@ impl Engine {
                     // that (1.0 + x).exp() would produce even when drift_amount is near zero.
                     let drift_ratio = 1.0f32 + drift_amount;
 
-                    // Calculate pitched t increment
-                    let hz_with_fine_tune =
-                        bb_osc.current_base_hz * 2.0f32.powf(self.fine_tune_cents / 1200.0);
-                    let t_increment_per_sample =
-                        (hz_with_fine_tune * bb_osc.detune_ratio * drift_ratio) / C2_FREQUENCY_HZ;
-
-                    // Advance continuous t
-                    bb_osc.t += t_increment_per_sample as f64;
-
-                    // Only mix into output if this voice has non-zero gain or is still fading
-                    if bb_osc.voice.gain > 1e-6 || bb_osc.voice.target_gain > 0.0 {
-                        // Evaluate algorithm at t + t_offset
+                    if self.bytebeat.glacial_fm_enabled {
+                        // Glacial S&H FM mode: t advances at ~1 integer step per 4 s,
+                        // the bytebeat byte is sample-and-held, and used to FM-modulate
+                        // a sine carrier at the current pitch.
+                        let glacial_step = 1.0 / (self.sample_rate as f64 * 4.0);
+                        bb_osc.t += glacial_step;
                         let t_eval = (bb_osc.t as u64).wrapping_add(bb_osc.t_offset);
-                        let byte = self.bytebeat.algo.eval(t_eval) as i8;
-                        let sample = byte as f32 / 128.0;
+                        if t_eval != bb_osc.fm_prev_t_int {
+                            let byte = self.bytebeat.algo.eval(t_eval) as i8;
+                            bb_osc.fm_held = byte as f32 / 128.0;
+                            bb_osc.fm_prev_t_int = t_eval;
+                        }
 
-                        // Mix with panning and gains
-                        let mixed = sample * normalization * bb_osc.voice.gain * self.bytebeat.gain * self.bytebeat.volume;
-                        l += mixed * bb_osc.voice.pan_l;
-                        r += mixed * bb_osc.voice.pan_r;
+                        if bb_osc.voice.gain > 1e-6 || bb_osc.voice.target_gain > 0.0 {
+                            let inst_hz = (bb_osc.current_base_hz
+                                + bb_osc.fm_held * bb_osc.current_base_hz * BB_GLACIAL_FM_DEPTH)
+                                .max(0.0);
+                            bb_osc.fm_carrier_phase +=
+                                inst_hz as f64 / self.sample_rate as f64;
+                            if bb_osc.fm_carrier_phase >= 1.0 {
+                                bb_osc.fm_carrier_phase -= 1.0;
+                            }
+                            let sample = (bb_osc.fm_carrier_phase as f32
+                                * std::f32::consts::TAU)
+                                .sin();
+                            let mixed = sample
+                                * normalization
+                                * bb_osc.voice.gain
+                                * self.bytebeat.gain
+                                * self.bytebeat.volume;
+                            l += mixed * bb_osc.voice.pan_l;
+                            r += mixed * bb_osc.voice.pan_r;
+                        }
+                    } else {
+                        // Normal mode: t advances at pitch rate, raw bytebeat output.
+
+                        // Calculate pitched t increment
+                        let hz_with_fine_tune =
+                            bb_osc.current_base_hz * 2.0f32.powf(self.fine_tune_cents / 1200.0);
+                        let t_increment_per_sample =
+                            (hz_with_fine_tune * bb_osc.detune_ratio * drift_ratio) / C2_FREQUENCY_HZ;
+
+                        // Advance continuous t
+                        bb_osc.t += t_increment_per_sample as f64;
+
+                        // Only mix into output if this voice has non-zero gain or is still fading
+                        if bb_osc.voice.gain > 1e-6 || bb_osc.voice.target_gain > 0.0 {
+                            // Evaluate algorithm at t + t_offset
+                            let t_eval = (bb_osc.t as u64).wrapping_add(bb_osc.t_offset);
+                            let byte = self.bytebeat.algo.eval(t_eval) as i8;
+                            let sample = byte as f32 / 128.0;
+
+                            // Mix with panning and gains
+                            let mixed = sample * normalization * bb_osc.voice.gain * self.bytebeat.gain * self.bytebeat.volume;
+                            l += mixed * bb_osc.voice.pan_l;
+                            r += mixed * bb_osc.voice.pan_r;
+                        }
                     }
                 }
             }
@@ -4123,5 +4196,66 @@ mod tests {
         assert_eq!(engine.bytebeat.drone_speed, 8, "speed 255 should clamp to 8");
         engine.set_bytebeat_drone_speed(4);
         assert_eq!(engine.bytebeat.drone_speed, 4);
+    }
+
+    #[test]
+    fn bytebeat_glacial_fm_produces_nonzero_output() {
+        let wavetables = vec![default_sine_wavetable()];
+        let mut engine = Engine::new(48_000, 1, wavetables).unwrap();
+        engine.set_frequency(220.0);
+        engine.set_bytebeat_active_immediate(true);
+        engine.set_bytebeat_glacial_fm(true);
+        let mut buf = vec![0i16; 2048];
+        engine.render_i16_stereo(&mut buf);
+        assert!(
+            buf.iter().any(|&s| s != 0),
+            "glacial FM mode should produce non-zero output"
+        );
+    }
+
+    #[test]
+    fn bytebeat_glacial_fm_resets_carrier_phase_on_enable() {
+        let wavetables = vec![default_sine_wavetable()];
+        let mut engine = Engine::new(48_000, 1, wavetables).unwrap();
+        engine.set_frequency(440.0);
+        engine.set_bytebeat_active_immediate(true);
+
+        // Run a few frames first so fm_carrier_phase would normally drift
+        let mut buf = vec![0i16; 512];
+        engine.render_i16_stereo(&mut buf);
+
+        // Enabling Glacial FM should reset all carrier phases to 0
+        engine.set_bytebeat_glacial_fm(true);
+        for osc in &engine.bytebeat.oscillators {
+            assert_eq!(
+                osc.fm_carrier_phase, 0.0,
+                "fm_carrier_phase should reset to 0 on enable"
+            );
+            assert_eq!(
+                osc.fm_prev_t_int,
+                u64::MAX,
+                "fm_prev_t_int should reset to u64::MAX on enable"
+            );
+            assert_eq!(osc.fm_held, 0.0, "fm_held should reset to 0.0 on enable");
+        }
+    }
+
+    #[test]
+    fn bytebeat_glacial_fm_disable_reverts_to_raw_mode() {
+        let wavetables = vec![default_sine_wavetable()];
+        let mut engine = Engine::new(48_000, 1, wavetables).unwrap();
+        engine.set_frequency(220.0);
+        engine.set_bytebeat_active_immediate(true);
+
+        engine.set_bytebeat_glacial_fm(true);
+        assert!(engine.bytebeat.glacial_fm_enabled);
+
+        engine.set_bytebeat_glacial_fm(false);
+        assert!(!engine.bytebeat.glacial_fm_enabled);
+
+        // Raw bytebeat output should still render without panic
+        let mut buf = vec![0i16; 512];
+        engine.render_i16_stereo(&mut buf);
+        assert!(buf.iter().any(|&s| s != 0), "raw mode should produce output after disabling glacial FM");
     }
 }
